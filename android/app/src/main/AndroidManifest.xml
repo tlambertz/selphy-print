@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+  <uses-permission android:name="android.permission.INTERNET" />
+
+  <application
+      android:label="Selphy Print"
+      android:icon="@mipmap/ic_launcher"
+      android:theme="@android:style/Theme.Material.NoActionBar"
+      android:usesCleartextTraffic="true">
+
+    <activity
+        android:name=".MainActivity"
+        android:exported="true">
+      <intent-filter>
+        <action android:name="android.intent.action.MAIN" />
+        <category android:name="android.intent.category.LAUNCHER" />
+      </intent-filter>
+    </activity>
+
+    <!-- The share-sheet entry: what Vanadium/Firefox can't register for the
+         PWA, this native intent-filter provides unconditionally. -->
+    <activity
+        android:name=".ShareActivity"
+        android:exported="true"
+        android:excludeFromRecents="true"
+        android:theme="@android:style/Theme.Material.Dialog.NoActionBar">
+      <intent-filter>
+        <action android:name="android.intent.action.SEND" />
+        <category android:name="android.intent.category.DEFAULT" />
+        <data android:mimeType="image/*" />
+      </intent-filter>
+      <intent-filter>
+        <action android:name="android.intent.action.SEND_MULTIPLE" />
+        <category android:name="android.intent.category.DEFAULT" />
+        <data android:mimeType="image/*" />
+      </intent-filter>
+    </activity>
+  </application>
+</manifest>

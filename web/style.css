@@ -487,6 +487,7 @@ body {
 .sheet h3 { margin: 20px 0 6px; font-size: 14px; color: var(--text); }
 .sheet-sub { margin: 0; color: var(--muted); font-size: 13px; }
 .sheet-help { color: var(--muted); font-size: 13px; margin: 0 0 12px; }
+.sheet-help a { color: var(--accent-2); font-weight: 600; text-decoration: none; }
 .sheet-help.subtle { color: var(--faint); font-size: 12px; margin: 10px 0 0; }
 .cal-inputs {
   display: grid;

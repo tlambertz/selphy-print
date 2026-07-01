@@ -101,6 +101,8 @@ Edit `docker-compose.yml` (printer IP), then `docker compose up -d`.
 
 ## Android install & share
 
+**Chrome (with Play services):**
+
 1. Open the HTTPS URL in Chrome → menu → **Install app** (on newer Chrome:
    "Add to Home screen" → **Install** — *not* "Create shortcut"! A shortcut
    looks identical on the home screen but never registers in the share
@@ -110,6 +112,28 @@ Edit `docker-compose.yml` (printer IP), then `docker compose up -d`.
    appears once Android finishes minting the WebAPK (usually seconds).
    Then: Gallery/Google Photos → select one **or many** photos → Share →
    **Selphy Print**.
+
+**Firefox / Vanadium / GrapheneOS (no WebAPK support — PWA share targets
+cannot work there; see GrapheneOS/Vanadium#714):** use the bundled
+**companion app** instead:
+
+1. On the phone, open the web app → printer status pill → *install the tiny
+   companion app* (serves `selphy-share.apk`, ~26 kB, built from
+   [`android/`](android/), no dependencies, no Google).
+2. Open it once and set the server URL.
+3. Share images (single or bulk) from any app → **Selphy Print** appears in
+   the share sheet. It uploads them to the server inbox and opens the web
+   app with the photos queued — same flow as the PWA share target.
+
+You can still "Add to Home screen" from Firefox/Vanadium for a launcher icon;
+crop UI and printing work in any browser — only share-sheet registration
+needs the companion.
+
+Rebuild the APK: `cd android && ANDROID_HOME=<sdk> gradle assembleRelease`,
+output lands in `android/app/build/outputs/apk/release/`; copy it to
+`web/selphy-share.apk`. The signing keystore (`android/keystore.jks`,
+passwords in `app/build.gradle`) is committed so rebuilt APKs install as
+updates — replace it if your repo is public.
 3. A single shared photo opens the crop editor directly; bulk shares land in
    the queue — tap any photo to adjust its crop, rotation, or copy count.
 4. If you ever change `share_target` in the manifest, uninstall and reinstall
