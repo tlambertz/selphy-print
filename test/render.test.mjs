@@ -30,3 +30,11 @@ const cal = await renderCalibration(target);
 meta = await sharp(cal).metadata();
 assert.equal(meta.width, 1181); assert.equal(meta.height, 1748);
 console.log('calibration ok');
+
+// bleed pre-compensation: full page out, mirrored bleed at edges
+const bleed = { top: 30, bottom: 30, left: 50, right: 69 };
+out = await renderForPrint(src, { crop: { x: 0.1, y: 0.1, w: 0.75, h: 0.75 * (1181/1748) * (3000/2000) }, rotate: 0, target, bleed, icc: {} });
+meta = await sharp(out).metadata();
+assert.equal(meta.width, 1181); assert.equal(meta.height, 1748);
+console.log('render bleed ok:', meta.width + 'x' + meta.height);
+await sharp(out).rotate(-90).resize(900).png().toFile(process.env.BLEED_PREVIEW || '/dev/null');

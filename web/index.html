@@ -112,7 +112,7 @@
         <span class="corner bl"></span><span class="corner br"></span>
         <span class="third v1"></span><span class="third v2"></span>
         <span class="third h1"></span><span class="third h2"></span>
-        <div id="overscan-guide"><span class="guide-tag">safe area</span></div>
+        <div id="overscan-guide"><span class="guide-tag">±1 mm</span></div>
       </div>
     </div>
     <div class="editor-tools">
@@ -129,7 +129,7 @@
         </button>
       </div>
     </div>
-    <p id="editor-hint">Drag to move · pinch to zoom · dashed line = what survives borderless trim</p>
+    <p id="editor-hint">Drag to move · pinch to zoom · the full frame prints, edges ±1 mm feed tolerance</p>
   </div>
 
   <!-- Printer / calibration sheet -->
@@ -141,11 +141,11 @@
 
       <h3>Borderless trim calibration</h3>
       <p class="sheet-help">
-        Borderless prints are enlarged by the printer, so the outermost few mm
-        of the image never land on paper. Print the ruler page — it carries the
-        letters <b>T&nbsp;B&nbsp;L&nbsp;R</b> — and enter the first readable
-        tick next to each letter. The letters match the crop editor’s
-        orientation.
+        Borderless prints are enlarged by the printer, trimming the outer few
+        mm. These values tell the server how much, and every print is
+        pre-compensated accordingly — so your crop lands on paper exactly.
+        Print the ruler page (letters <b>T&nbsp;B&nbsp;L&nbsp;R</b> match the
+        crop editor’s orientation) and enter the first readable tick per edge.
       </p>
       <button id="btn-calibrate" class="btn">Print calibration page</button>
       <div class="cal-inputs">

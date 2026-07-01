@@ -17,17 +17,19 @@ Android share sheet ──► PWA (crop UI, queue) ──► Node server ──�
   enlargement cannot be bypassed over IPP (custom media caps at 102×153 mm),
   so the outer few mm of any borderless print never land on paper.
 
-  This app removes every *other* source of cropping: images are rendered at
-  exactly the page raster and submitted with `print-scaling=none`, which per
-  PWG 5100.16 means 1:1 centered placement — no printer-side scaling
-  decisions. What remains is only the firmware enlargement, shown in the crop
-  UI as the dashed **safe-area guide**: by theory it trims 2.7–3.3 mm per
-  100 mm-side and ~4.9 mm per 148 mm-end; community grid measurements across
-  CP1000/CP1300/CP1500 span 2.5–4.5 mm and 4–6 mm with ±1 mm per-unit feed
-  variance. Defaults are 3.5/5.5 mm (covers all measured units); print the
-  in-app **calibration page** (mm rulers in page space, sent through the
-  identical pipeline) and enter the first-visible ticks to make the guide
-  exact for *your* unit.
+  This app removes every *other* source of cropping (images rendered at
+  exactly the page raster, submitted with `print-scaling=none` = 1:1 centered
+  placement per PWG 5100.16) and then **pre-compensates the enlargement
+  itself**: your crop is rendered into the calibrated surviving window of the
+  page and the doomed outer zone is filled with mirrored bleed. Net result:
+  the frame you set in the crop UI is what lands on paper, edge to edge,
+  within the printer's ~±1 mm mechanical feed tolerance (shown as a thin
+  guide line). Calibrate once per unit with the in-app **calibration page**
+  (mm rulers + T/B/L/R letters, printed deliberately *without* compensation
+  so it measures the raw firmware behavior); theory predicts 2.7–3.3 mm per
+  100 mm-side and ~4.9 mm per 148 mm-end, community measurements span
+  2.5–4.5 / 4–6 mm, and opposite edges genuinely differ (feed offset) —
+  hence per-edge values.
 - **Color:** the CP1500 has a fixed internal color pipeline that cannot be
   disabled and tends to oversaturate with a bluish cast. The server converts
   every image into a printer ICC profile (which characterizes that whole
@@ -141,9 +143,10 @@ updates — replace it if your repo is public.
 
 ## Crop UI
 
-- The frame is the full borderless page (100×148 mm); **the dashed line is
-  the safe area** — anything outside it may be trimmed by the printer's
-  borderless enlargement. Drag to move, pinch/scroll to zoom, ⟳ to rotate.
+- The frame is what prints: the render is pre-compensated for your
+  calibrated borderless trim, so the full frame lands on paper. The thin
+  dashed line marks the ~±1 mm feed-tolerance band at the edges. Drag to
+  move, pinch/scroll to zoom, ⟳ to rotate.
 - "White border" renders to the printer's bordered printable area
   (2.5 mm sides / 3.7 mm ends) instead of full bleed — nothing is trimmed in
   that mode.
@@ -152,9 +155,11 @@ updates — replace it if your repo is public.
   **T/B/L/R** (hold it so T reads on top — that matches the crop editor's
   orientation). The first readable tick next to each letter is your unit's
   real trim on that edge; enter the four values in the same sheet (stored per
-  device in the browser; server-wide via `OVERSCAN_MM`). The safe-area guide
-  updates immediately. Opposite edges genuinely differ (~1–2 mm feed offset),
-  which is why calibration is per edge.
+  device in the browser and sent with every print job; server-wide defaults
+  via `OVERSCAN_MM`). From then on every borderless print is pre-compensated
+  with those values. Opposite edges genuinely differ (~1–2 mm feed offset),
+  which is why calibration is per edge. The calibration page itself always
+  prints uncompensated, so re-measuring stays meaningful.
 
 ## Color notes
 

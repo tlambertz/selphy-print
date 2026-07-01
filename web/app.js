@@ -286,18 +286,18 @@ function layoutEditor() {
     width: fw + 'px',
     height: fh + 'px',
   });
-  // Safe-area guide: the page region that survives the firmware's borderless
-  // enlargement, inset per edge by the measured trim (page-mm → frame px).
-  const os = effectiveOverscan();
-  const insL = (os.left / paper.mm.w) * fw;
-  const insR = (os.right / paper.mm.w) * fw;
-  const insT = (os.top / paper.mm.h) * fh;
-  const insB = (os.bottom / paper.mm.h) * fh;
+  // The render pre-compensates the calibrated trim, so the full frame lands
+  // on paper. What remains is mechanical feed variance (~±1 mm): show a thin
+  // tolerance band — content inside it is guaranteed, the band itself may
+  // gain/lose a hair.
+  const TOLERANCE_MM = 1;
+  const insX = (TOLERANCE_MM / paper.mm.w) * fw;
+  const insY = (TOLERANCE_MM / paper.mm.h) * fh;
   Object.assign(guideEl.style, {
-    left: insL + 'px',
-    top: insT + 'px',
-    width: fw - insL - insR + 'px',
-    height: fh - insT - insB + 'px',
+    left: insX + 'px',
+    top: insY + 'px',
+    width: fw - 2 * insX + 'px',
+    height: fh - 2 * insY + 'px',
   });
 }
 
@@ -428,6 +428,8 @@ async function printAll() {
           rotate: item.rotate,
           copies: item.copies,
           border,
+          // per-device calibration → the server pre-compensates the render
+          overscan: effectiveOverscan(),
         })
       );
       const res = await fetch('api/print', { method: 'POST', body: form });

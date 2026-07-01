@@ -130,16 +130,33 @@ app.post('/api/print', async (req, reply) => {
   const copies = Math.min(Math.max(parseInt(options.copies, 10) || 1, 1), 99);
   const borderless = !options.border;
 
+  // Per-edge borderless trim in page-mm: the client sends its calibrated
+  // values (per-device localStorage); fall back to the server defaults.
+  // Renders pre-compensate for it, so calibration changes the actual print.
+  const overscanMm = {};
+  for (const edge of ['top', 'bottom', 'left', 'right']) {
+    const v = Number(options.overscan?.[edge]);
+    overscanMm[edge] = isFinite(v) && v >= 0 && v <= 12 ? v : config.overscan[edge];
+  }
+  const PX_PER_MM = 300 / 25.4;
+  const bleed = {
+    top: Math.round(overscanMm.top * PX_PER_MM),
+    bottom: Math.round(overscanMm.bottom * PX_PER_MM),
+    left: Math.round(overscanMm.left * PX_PER_MM),
+    right: Math.round(overscanMm.right * PX_PER_MM),
+  };
+
   const job = enqueue(async (job) => {
     job.state = 'rendering';
     job.stateText = 'processing image…';
-    // Borderless: exact IPP page raster, imaged 1:1 (print-scaling=none).
-    // Bordered: exact printable-area raster; with print-scaling=none it is
-    // centered on the page, which coincides with the printable area.
+    // Borderless: exact IPP page raster (imaged 1:1, print-scaling=none),
+    // crop rendered into the calibrated surviving window + mirrored bleed.
+    // Bordered: exact printable-area raster, nothing trimmed, no bleed.
     const jpeg = await renderForPrint(imageBuf, {
       crop: options.crop || null,
       rotate: [0, 90, 180, 270].includes(options.rotate) ? options.rotate : 0,
       target: borderless ? config.paper.page : config.paper.printable,
+      bleed: borderless ? bleed : null,
       icc: config.icc,
     });
     await printBuffer(job, jpeg, { copies, borderless });

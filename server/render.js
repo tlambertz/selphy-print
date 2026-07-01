@@ -28,11 +28,21 @@ const execFileP = promisify(execFile);
  *   crop   {x,y,w,h} as 0..1 fractions of the EXIF-oriented, user-rotated image
  *   rotate 0|90|180|270 user rotation on top of EXIF orientation
  *   target {w,h} destination raster in px, landscape (e.g. 1748×1181 postcard page)
+ *   bleed  {top,bottom,left,right} px of the target that the printer's
+ *          borderless enlargement will trim (from calibration). The crop is
+ *          rendered into the surviving window and the bleed zone is filled
+ *          with mirrored edge content, so the framed image = the paper.
  *   icc    { profile: path|null, intent: 'perceptual'|'relative', quality }
  * @returns {Promise<Buffer>} portrait (short-edge-first) JPEG at target size
  */
 export async function renderForPrint(input, opts) {
   const { crop, rotate = 0, target, icc = {} } = opts;
+  const bleed = { top: 0, bottom: 0, left: 0, right: 0, ...(opts.bleed || {}) };
+  const inner = {
+    w: target.w - bleed.left - bleed.right,
+    h: target.h - bleed.top - bleed.bottom,
+  };
+  if (inner.w < 100 || inner.h < 100) throw new Error('bleed leaves no printable window');
 
   let img = sharp(input, { failOn: 'truncated' }).rotate(); // EXIF auto-orient
   if (rotate) img = img.rotate(rotate);
@@ -47,15 +57,22 @@ export async function renderForPrint(input, opts) {
         width: Math.round(crop.w * meta.width),
         height: Math.round(crop.h * meta.height),
       }
-    : centerCover(meta.width, meta.height, target.w / target.h);
+    : centerCover(meta.width, meta.height, inner.w / inner.h);
   region.left = Math.max(0, Math.min(region.left, meta.width - 1));
   region.top = Math.max(0, Math.min(region.top, meta.height - 1));
   region.width = Math.min(region.width, meta.width - region.left);
   region.height = Math.min(region.height, meta.height - region.top);
 
-  const rendered = await sharp(buf)
+  // Mirrored bleed: trimmed by the enlargement; under ±1 mm registration
+  // drift a sliver of mirrored image shows instead of a white edge.
+  // (Separate pass for the final rotate — sharp orders rotate before extend
+  // within a single pipeline, which would put the bleed on the wrong edges.)
+  const page = await sharp(buf)
     .extract(region)
-    .resize(target.w, target.h, { fit: 'fill', kernel: 'lanczos3' })
+    .resize(inner.w, inner.h, { fit: 'fill', kernel: 'lanczos3' })
+    .extend({ ...bleed, extendWith: 'mirror' })
+    .toBuffer();
+  const rendered = await sharp(page)
     .rotate(90) // printer feeds portrait, short edge first
     .jpeg({ quality: 97, chromaSubsampling: '4:4:4' })
     .toBuffer();
