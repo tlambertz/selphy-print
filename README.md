@@ -10,11 +10,24 @@ Android share sheet ──► PWA (crop UI, queue) ──► Node server ──�
 
 ## Why this exists
 
-- **The "borders thing":** the SELPHY's native print canvas is 1872×1248 px
-  (exactly 2:3), but the visible paper is only the central 1748×1181 px
-  (100×148 mm). Borderless prints are always overscanned ~3 mm per edge and the
-  edges get chopped. The crop UI here frames at the true 2:3 canvas and shows a
-  dashed **safe-area guide** for what will actually be visible on paper.
+- **The "borders thing":** over IPP, the borderless postcard page is
+  100×148 mm = 1181×1748 px @300 dpi — but the print head images a larger
+  canvas (1248×1872 px, 105.7×158.5 mm; Gutenprint `print-dyesub.c`), and the
+  firmware *unconditionally enlarges* every borderless page onto it. That
+  enlargement cannot be bypassed over IPP (custom media caps at 102×153 mm),
+  so the outer few mm of any borderless print never land on paper.
+
+  This app removes every *other* source of cropping: images are rendered at
+  exactly the page raster and submitted with `print-scaling=none`, which per
+  PWG 5100.16 means 1:1 centered placement — no printer-side scaling
+  decisions. What remains is only the firmware enlargement, shown in the crop
+  UI as the dashed **safe-area guide**: by theory it trims 2.7–3.3 mm per
+  100 mm-side and ~4.9 mm per 148 mm-end; community grid measurements across
+  CP1000/CP1300/CP1500 span 2.5–4.5 mm and 4–6 mm with ±1 mm per-unit feed
+  variance. Defaults are 3.5/5.5 mm (covers all measured units); print the
+  in-app **calibration page** (mm rulers in page space, sent through the
+  identical pipeline) and enter the first-visible ticks to make the guide
+  exact for *your* unit.
 - **Color:** the CP1500 has a fixed internal color pipeline that cannot be
   disabled and tends to oversaturate with a bluish cast. The server converts
   every image into a printer ICC profile (which characterizes that whole
@@ -69,7 +82,9 @@ Edit `docker-compose.yml` (printer IP), then `docker compose up -d`.
 | `ICC_PROFILE`   | *(none)*     | Absolute path to the printer ICC profile; unset = no color management |
 | `ICC_INTENT`    | `perceptual` | `perceptual` (smooth, saturated photos) or `relative` (accurate in-gamut, + black point compensation) |
 | `PORT` / `HOST` | `8080` / `0.0.0.0` | Listen address |
-| `PRINT_SCALING` | `fill`       | IPP print-scaling sent with each job |
+| `PRINT_SCALING` | `none`       | IPP print-scaling; images are sent at exactly page size so `none` = 1:1 placement |
+| `OVERSCAN_SIDES_MM` | `3.5`    | Default safe-area inset per 100 mm edge (borderless trim) |
+| `OVERSCAN_ENDS_MM`  | `5.5`    | Default safe-area inset per 148 mm edge |
 | `JPEG_QUALITY`  | `95`         | Quality of the JPEG sent to the printer |
 
 ## Printer setup (once)
@@ -97,15 +112,18 @@ Edit `docker-compose.yml` (printer IP), then `docker compose up -d`.
 
 ## Crop UI
 
-- The frame is the printer's true 2:3 canvas; **the dashed line is the
-  safe area** — anything outside it may be trimmed by the printer's borderless
-  overscan. Drag to move, pinch/scroll to zoom, ⟳ to rotate.
-- "White border" prints with the printer's bordered mode (2.5 mm sides /
-  3.7 mm ends) instead of full bleed.
-- **Calibration:** tap the printer status in the header to print a page of mm
-  rulers. The first visible tick on each edge tells you your unit's actual
-  overscan; adjust `visible` in `server/config.js` if it differs much from the
-  default (34 px sides / 62 px ends).
+- The frame is the full borderless page (100×148 mm); **the dashed line is
+  the safe area** — anything outside it may be trimmed by the printer's
+  borderless enlargement. Drag to move, pinch/scroll to zoom, ⟳ to rotate.
+- "White border" renders to the printer's bordered printable area
+  (2.5 mm sides / 3.7 mm ends) instead of full bleed — nothing is trimmed in
+  that mode.
+- **Calibration:** tap the printer status pill → *Print calibration page*.
+  The print carries mm rulers counted inward from each page edge; the first
+  readable tick per edge is your unit's real trim. Enter the two values in the
+  same sheet (stored per device in the browser; server-wide defaults via
+  `OVERSCAN_SIDES_MM` / `OVERSCAN_ENDS_MM`). The safe-area guide updates
+  immediately.
 
 ## Color notes
 

@@ -84,6 +84,7 @@ async function printBuffer(job, jpeg, { copies = 1, borderless = true, jobName =
 
 app.get('/api/config', async () => ({
   paper: config.paper,
+  overscan: config.overscan,
   icc: { enabled: !!config.icc.profile, intent: config.icc.intent },
   printerConfigured: !!printerUrl(),
 }));
@@ -132,10 +133,13 @@ app.post('/api/print', async (req, reply) => {
   const job = enqueue(async (job) => {
     job.state = 'rendering';
     job.stateText = 'processing image…';
+    // Borderless: exact IPP page raster, imaged 1:1 (print-scaling=none).
+    // Bordered: exact printable-area raster; with print-scaling=none it is
+    // centered on the page, which coincides with the printable area.
     const jpeg = await renderForPrint(imageBuf, {
       crop: options.crop || null,
       rotate: [0, 90, 180, 270].includes(options.rotate) ? options.rotate : 0,
-      canvas: config.paper.canvas,
+      target: borderless ? config.paper.page : config.paper.printable,
       icc: config.icc,
     });
     await printBuffer(job, jpeg, { copies, borderless });
@@ -156,7 +160,7 @@ app.post('/api/calibrate', async () => {
   const job = enqueue(async (job) => {
     job.state = 'rendering';
     job.stateText = 'rendering calibration page…';
-    const jpeg = await renderCalibration(config.paper.canvas);
+    const jpeg = await renderCalibration(config.paper.page);
     await printBuffer(job, jpeg, { copies: 1, borderless: true, jobName: 'calibration' });
   });
   return { jobId: job.id };

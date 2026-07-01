@@ -6,7 +6,7 @@ const url = 'ipp://127.0.0.1:6310/ipp/print';
 const pa = await getPrinterAttributes(url);
 console.log('printer:', pa.attrs['printer-name'], '| state', pa.attrs['printer-state'], '| status', pa.statusCode.toString(16));
 
-const jpeg = await sharp({ create: { width: 1248, height: 1872, channels: 3, background: '#cc4455' } }).jpeg().toBuffer();
+const jpeg = await sharp({ create: { width: 1181, height: 1748, channels: 3, background: '#cc4455' } }).jpeg().toBuffer();
 const { jobId, jobState } = await printJob(url, jpeg, {
   jobName: 'test-photo',
   copies: 1,

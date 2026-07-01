@@ -12,21 +12,21 @@ const src = await sharp(Buffer.from(
      <circle cx="1500" cy="1000" r="400" fill="#ffffff"/>
    </svg>`)).jpeg().toBuffer();
 
-const canvas = { w: 1872, h: 1248 };
+const target = { w: 1748, h: 1181 };
 
 // no ICC
-let out = await renderForPrint(src, { crop: { x: 0.1, y: 0.1, w: 0.75, h: 0.75 }, rotate: 0, canvas, icc: {} });
+let out = await renderForPrint(src, { crop: { x: 0.1, y: 0.1, w: 0.75, h: 0.75 }, rotate: 0, target, icc: {} });
 let meta = await sharp(out).metadata();
-assert.equal(meta.width, 1248); assert.equal(meta.height, 1872);
+assert.equal(meta.width, 1181); assert.equal(meta.height, 1748);
 console.log('render no-icc ok:', meta.width + 'x' + meta.height, meta.format);
 
 // with ICC profile
-out = await renderForPrint(src, { crop: null, rotate: 90, canvas, icc: { profile: 'profiles/CP1500-farbenwerk.icc', intent: 'perceptual', quality: 95 } });
+out = await renderForPrint(src, { crop: null, rotate: 90, target, icc: { profile: 'profiles/CP1500-farbenwerk.icc', intent: 'perceptual', quality: 95 } });
 meta = await sharp(out).metadata();
-assert.equal(meta.width, 1248); assert.equal(meta.height, 1872);
+assert.equal(meta.width, 1181); assert.equal(meta.height, 1748);
 console.log('render icc ok:', meta.width + 'x' + meta.height, 'bytes', out.length);
 
-const cal = await renderCalibration(canvas);
+const cal = await renderCalibration(target);
 meta = await sharp(cal).metadata();
-assert.equal(meta.width, 1248); assert.equal(meta.height, 1872);
+assert.equal(meta.width, 1181); assert.equal(meta.height, 1748);
 console.log('calibration ok');

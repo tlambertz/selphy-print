@@ -5,11 +5,23 @@ import { inboxAdd, inboxAll, inboxDelete } from './db.js';
 /* ---------- state ---------- */
 
 // Filled from /api/config; sensible defaults so the UI works offline.
+// `page` is the raster we send (imaged 1:1); the safe-area guide insets by
+// the firmware's borderless trim, measured in page-mm per edge.
 let paper = {
   name: 'Postcard 100×148mm',
-  canvas: { w: 1872, h: 1248 },   // landscape orientation for the UI
-  visible: { w: 1748, h: 1181 },
+  mm: { w: 148, h: 100 },
+  page: { w: 1748, h: 1181 }, // landscape px @300dpi
 };
+let overscan = { sidesMm: 3.5, endsMm: 5.5 }; // server default; calibratable
+
+const OVERSCAN_KEY = 'selphy-overscan';
+function effectiveOverscan() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(OVERSCAN_KEY));
+    if (saved && isFinite(saved.sidesMm) && isFinite(saved.endsMm)) return saved;
+  } catch {}
+  return overscan;
+}
 
 // Queue items: { id, blob, url, bitmap?, crop: {cx, cy, scale, rotate}, copies, state }
 // crop.cx/cy = center of the crop window in image coordinates (of the rotated image),
@@ -55,17 +67,39 @@ drainServerInbox().then(() => loadInbox());
 pollStatus();
 setInterval(pollStatus, 10000);
 
-// Tap the printer status to print a calibration page (mm rulers to measure
-// the real overscan of your unit).
-$('printer-status').addEventListener('click', async () => {
-  if (!confirm('Print a calibration page? It uses one sheet of paper.')) return;
+// Printer sheet: status details + borderless-trim calibration.
+$('printer-status').addEventListener('click', () => {
+  const os = effectiveOverscan();
+  $('cal-sides').value = os.sidesMm;
+  $('cal-ends').value = os.endsMm;
+  $('cal-defaults').textContent = `${overscan.sidesMm} mm sides, ${overscan.endsMm} mm ends`;
+  $('settings-printer').textContent = $('status-text').textContent;
+  $('settings').hidden = false;
+});
+$('settings-close').addEventListener('click', () => ($('settings').hidden = true));
+document.querySelector('.sheet-backdrop').addEventListener('click', () => ($('settings').hidden = true));
+
+$('btn-calibrate').addEventListener('click', async () => {
+  if (!confirm('Print the calibration page? It uses one sheet of paper.')) return;
   try {
     const res = await fetch('api/calibrate', { method: 'POST' });
     if (!res.ok) throw new Error(await res.text());
-    toast('Calibration page queued — read the first visible mm tick on each edge');
+    toast('Calibration page queued');
   } catch (err) {
     toast('Calibration failed: ' + err.message);
   }
+});
+
+$('cal-save').addEventListener('click', () => {
+  const sidesMm = parseFloat($('cal-sides').value);
+  const endsMm = parseFloat($('cal-ends').value);
+  if (!isFinite(sidesMm) || !isFinite(endsMm) || sidesMm < 0 || endsMm < 0 || sidesMm > 12 || endsMm > 12) {
+    toast('Enter trim values between 0 and 12 mm');
+    return;
+  }
+  localStorage.setItem(OVERSCAN_KEY, JSON.stringify({ sidesMm, endsMm }));
+  $('settings').hidden = true;
+  toast('Safe area updated for this device');
 });
 
 // If the share POST hit the server instead of the service worker (first-ever
@@ -89,6 +123,7 @@ async function fetchConfig() {
     if (!res.ok) return;
     const cfg = await res.json();
     if (cfg.paper) paper = cfg.paper;
+    if (cfg.overscan) overscan = cfg.overscan;
   } catch {}
 }
 
@@ -199,7 +234,7 @@ function rotatedSize() {
 }
 
 function paperAspect() {
-  return paper.canvas.w / paper.canvas.h; // landscape, e.g. 1872/1248
+  return paper.page.w / paper.page.h; // landscape, e.g. 1748/1181 (= 148/100)
 }
 
 // Cover crop: largest paper-aspect window that fits in the image, centered.
@@ -249,9 +284,11 @@ function layoutEditor() {
     width: fw + 'px',
     height: fh + 'px',
   });
-  // Overscan guide: the region of the print canvas that lands on visible paper.
-  const ix = ((paper.canvas.w - paper.visible.w) / 2 / paper.canvas.w) * fw;
-  const iy = ((paper.canvas.h - paper.visible.h) / 2 / paper.canvas.h) * fh;
+  // Safe-area guide: the page region that survives the firmware's borderless
+  // enlargement, inset per edge by the measured trim (page-mm → frame px).
+  const os = effectiveOverscan();
+  const ix = (os.endsMm / paper.mm.w) * fw; // long dimension = "ends"
+  const iy = (os.sidesMm / paper.mm.h) * fh; // short dimension = "sides"
   Object.assign(guideEl.style, {
     left: ix + 'px',
     top: iy + 'px',

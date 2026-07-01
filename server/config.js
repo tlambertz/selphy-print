@@ -2,19 +2,53 @@
 
 const env = process.env;
 
-// Postcard KP-108IN. Native spool canvas is exactly 2:3 (Gutenprint
-// print-dyesub.c cp910_page); visible paper is the central 100×148 mm.
-// The firmware overscans borderless prints onto the full canvas, so the
-// crop UI uses `canvas` as the frame and `visible` as the safe-area guide.
+/* Postcard KP-108IN geometry, all landscape px @300dpi.
+ *
+ * What is known for certain (IPP attributes + Gutenprint source):
+ * - The IPP page for jpn_hagaki is 100×148 mm → 1748×1181 px @300dpi.
+ *   A JPEG of exactly this size sent with print-scaling=none is imaged 1:1
+ *   onto the page raster (PWG 5100.16) — no printer-side rescale decision.
+ * - The dye-sub head canvas is larger (1872×1248 px = 105.66×158.5 mm,
+ *   Gutenprint print-dyesub.c): in borderless mode the firmware ENLARGES the
+ *   page raster onto that canvas, so content near the page edges lands beyond
+ *   the paper and is trimmed.
+ *
+ * The per-edge trim ("overscan", in page-mm) is firmware behavior that varies
+ * slightly per unit; defaults below come from community measurements and can
+ * be overridden after printing the calibration page (which carries mm rulers
+ * in page space, so the first visible tick per edge IS this number).
+ */
 const PAPERS = {
   postcard: {
     id: 'postcard',
     name: 'Postcard 100×148 mm (KP-108IN)',
-    canvas: { w: 1872, h: 1248 }, // landscape px @300dpi
-    visible: { w: 1748, h: 1181 },
+    // physical page in mm (landscape: w = 148 ends-dimension, h = 100 sides)
+    mm: { w: 148, h: 100 },
+    // IPP page raster @300dpi — the render target for borderless
+    page: { w: 1748, h: 1181 },
+    // printable area in bordered mode (printer default margins:
+    // 2.5 mm sides, 3.7 mm ends → 140.6×95.0 mm)
+    printable: { w: 1661, h: 1122 },
     // IPP media-size in 1/100 mm, portrait feed (x = short edge)
     media: { x: 10000, y: 14800 },
   },
+};
+
+/* Default borderless trim per edge in page-mm.
+ *
+ * Theory (canvas/page arithmetic): uniform firmware enlargement loses
+ * 3.31 mm per 100 mm-side and 4.90 mm per 148 mm-end; anisotropic stretch
+ * would lose 2.68/4.90. Which one the firmware does is unmeasured — the
+ * difference (~0.6 mm) is below the ±1 mm mechanical registration variance
+ * units exhibit anyway.
+ *
+ * Measurements (CP1000/CP1300/CP1500 community grids): sides 2.5–4.5 mm,
+ * ends 4–6 mm, per-unit asymmetry up to ~1 mm. Defaults below cover all
+ * measured reports; per-unit truth comes from the calibration page (UI) or
+ * these env vars. */
+const overscan = {
+  sidesMm: parseFloat(env.OVERSCAN_SIDES_MM || '3.5'),
+  endsMm: parseFloat(env.OVERSCAN_ENDS_MM || '5.5'),
 };
 
 export const config = {
@@ -26,6 +60,7 @@ export const config = {
   printerUrl: env.PRINTER_URL || null, // full override
 
   paper: PAPERS[env.PAPER || 'postcard'],
+  overscan,
 
   icc: {
     profile: env.ICC_PROFILE || null, // absolute path to .icc, empty = no color management
@@ -33,9 +68,9 @@ export const config = {
     quality: parseInt(env.JPEG_QUALITY || '95', 10),
   },
 
-  // 'fill' guarantees full-bleed; the printer rescales onto its overscan
-  // canvas regardless. 'none' would print 1:1 at 300dpi.
-  printScaling: env.PRINT_SCALING || 'fill',
+  // 'none' + an exactly page-sized image = 1:1 placement, no printer-side
+  // scaling decisions. Override only for experiments.
+  printScaling: env.PRINT_SCALING || 'none',
 
   maxUploadMb: parseInt(env.MAX_UPLOAD_MB || '64', 10),
 };

@@ -1,10 +1,17 @@
-/* Image pipeline: EXIF-orient → user rotate → crop → resize to the printer's
-   native canvas → ICC-convert into the printer profile (lcms2 jpgicc) →
+/* Image pipeline: EXIF-orient → user rotate → crop → resize to the exact
+   print raster → ICC-convert into the printer profile (lcms2 jpgicc) →
    untagged JPEG ready to send as-is over IPP.
 
-   The SELPHY has a fixed internal color pipeline that cannot be disabled, so
-   usable profiles characterize the *whole* path (sRGB-in → print). Converting
-   into the profile and sending the result untagged pre-compensates correctly. */
+   Geometry: the JPEG is rendered at exactly the destination raster size
+   (IPP page for borderless, printable area for bordered) and submitted with
+   print-scaling=none, so the printer images it 1:1 with no scaling decisions.
+   The only remaining transform is the firmware's borderless enlargement,
+   which the client-side safe-area guide accounts for.
+
+   Color: the SELPHY has a fixed internal color pipeline that cannot be
+   disabled, so usable profiles characterize the *whole* path (sRGB-in →
+   print). Converting into the profile and sending the result untagged
+   pre-compensates correctly. */
 
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
@@ -20,12 +27,12 @@ const execFileP = promisify(execFile);
  * @param {object} opts
  *   crop   {x,y,w,h} as 0..1 fractions of the EXIF-oriented, user-rotated image
  *   rotate 0|90|180|270 user rotation on top of EXIF orientation
- *   canvas {w,h} print canvas in px, landscape (e.g. 1872×1248 for postcard)
+ *   target {w,h} destination raster in px, landscape (e.g. 1748×1181 postcard page)
  *   icc    { profile: path|null, intent: 'perceptual'|'relative', quality }
- * @returns {Promise<Buffer>} portrait (short-edge-first) JPEG at native size
+ * @returns {Promise<Buffer>} portrait (short-edge-first) JPEG at target size
  */
 export async function renderForPrint(input, opts) {
-  const { crop, rotate = 0, canvas, icc = {} } = opts;
+  const { crop, rotate = 0, target, icc = {} } = opts;
 
   let img = sharp(input, { failOn: 'truncated' }).rotate(); // EXIF auto-orient
   if (rotate) img = img.rotate(rotate);
@@ -40,7 +47,7 @@ export async function renderForPrint(input, opts) {
         width: Math.round(crop.w * meta.width),
         height: Math.round(crop.h * meta.height),
       }
-    : centerCover(meta.width, meta.height, canvas.w / canvas.h);
+    : centerCover(meta.width, meta.height, target.w / target.h);
   region.left = Math.max(0, Math.min(region.left, meta.width - 1));
   region.top = Math.max(0, Math.min(region.top, meta.height - 1));
   region.width = Math.min(region.width, meta.width - region.left);
@@ -48,7 +55,7 @@ export async function renderForPrint(input, opts) {
 
   const rendered = await sharp(buf)
     .extract(region)
-    .resize(canvas.w, canvas.h, { fit: 'fill', kernel: 'lanczos3' })
+    .resize(target.w, target.h, { fit: 'fill', kernel: 'lanczos3' })
     .rotate(90) // printer feeds portrait, short edge first
     .jpeg({ quality: 97, chromaSubsampling: '4:4:4' })
     .toBuffer();
@@ -98,10 +105,14 @@ async function applyIcc(jpeg, icc) {
   }
 }
 
-/** Calibration page: mm rulers from every edge so the real visible area
-    (and thus overscan) can be measured off a physical print. */
-export async function renderCalibration(canvas, dpi = 300) {
-  const { w, h } = canvas; // landscape
+/** Calibration page, rendered at the exact borderless page raster and sent
+    through the same 1:1 pipeline as real prints. Rulers count page-mm inward
+    from every page edge; because borderless enlargement happens after this
+    raster, the first tick visible on the physical print directly reads off
+    the per-edge trim in page-mm — exactly the value the safe-area guide (and
+    the in-app calibration inputs) use. */
+export async function renderCalibration(page, dpi = 300) {
+  const { w, h } = page; // landscape
   const pxPerMm = dpi / 25.4;
   const ticks = [];
   const label = (x, y, text, anchor = 'middle') =>
@@ -128,8 +139,10 @@ export async function renderCalibration(canvas, dpi = 300) {
   }
 
   const border = `<rect x="1" y="1" width="${w - 2}" height="${h - 2}" fill="none" stroke="#000" stroke-width="2"/>`;
-  const text = `<text x="${w / 2}" y="${h / 2 - 60}" font-size="36" font-family="monospace" fill="#000" text-anchor="middle">selphy-print calibration — ticks are mm from canvas edge</text>
-  <text x="${w / 2}" y="${h / 2 + 80}" font-size="30" font-family="monospace" fill="#000" text-anchor="middle">read the first visible tick on each edge = overscan in mm</text>`;
+  const text = `<text x="${w / 2}" y="${h / 2 - 90}" font-size="34" font-family="monospace" fill="#000" text-anchor="middle">selphy-print calibration</text>
+  <text x="${w / 2}" y="${h / 2 - 40}" font-size="26" font-family="monospace" fill="#000" text-anchor="middle">short edges = "ends", long edges = "sides"</text>
+  <text x="${w / 2}" y="${h / 2 + 70}" font-size="26" font-family="monospace" fill="#000" text-anchor="middle">first readable tick per edge = trimmed mm</text>
+  <text x="${w / 2}" y="${h / 2 + 110}" font-size="26" font-family="monospace" fill="#000" text-anchor="middle">enter it in the app under Printer &gt; Calibration</text>`;
 
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}"><rect width="100%" height="100%" fill="#fff"/>${border}${ticks.join('')}${text}</svg>`;
 

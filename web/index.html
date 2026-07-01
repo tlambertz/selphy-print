@@ -131,6 +131,39 @@
     <p id="editor-hint">Drag to move · pinch to zoom · dashed line = what survives borderless trim</p>
   </div>
 
+  <!-- Printer / calibration sheet -->
+  <div id="settings" hidden>
+    <div class="sheet-backdrop"></div>
+    <div class="sheet">
+      <h2>Printer</h2>
+      <p id="settings-printer" class="sheet-sub">—</p>
+
+      <h3>Borderless trim calibration</h3>
+      <p class="sheet-help">
+        Borderless prints are enlarged by the printer, so the outermost few mm
+        of the image never land on paper. Print the ruler page, then enter the
+        first readable tick per edge — if two opposite edges differ (common,
+        ±1&nbsp;mm feed tolerance), enter the larger one.
+      </p>
+      <button id="btn-calibrate" class="btn">Print calibration page</button>
+      <div class="cal-inputs">
+        <label>
+          <span>Long edges (“sides”)</span>
+          <span class="cal-field"><input id="cal-sides" type="number" min="0" max="12" step="0.5" inputmode="decimal" /> mm</span>
+        </label>
+        <label>
+          <span>Short edges (“ends”)</span>
+          <span class="cal-field"><input id="cal-ends" type="number" min="0" max="12" step="0.5" inputmode="decimal" /> mm</span>
+        </label>
+      </div>
+      <p class="sheet-help subtle">Stored on this device. Server defaults: <span id="cal-defaults">—</span>.</p>
+      <div class="sheet-actions">
+        <button id="settings-close" class="btn quiet">Close</button>
+        <button id="cal-save" class="btn primary">Save</button>
+      </div>
+    </div>
+  </div>
+
   <div id="toast" hidden></div>
 
   <script type="module" src="app.js"></script>
