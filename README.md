@@ -101,10 +101,15 @@ Edit `docker-compose.yml` (printer IP), then `docker compose up -d`.
 
 ## Android install & share
 
-1. Open the HTTPS URL in Chrome → menu → **Install app**.
-2. The share-sheet entry appears once Android finishes minting the WebAPK
-   (usually seconds). Then: Gallery/Google Photos → select one **or many**
-   photos → Share → **Selphy Print**.
+1. Open the HTTPS URL in Chrome → menu → **Install app** (on newer Chrome:
+   "Add to Home screen" → **Install** — *not* "Create shortcut"! A shortcut
+   looks identical on the home screen but never registers in the share
+   sheet).
+2. Verify the install is real: the app must appear under Android
+   **Settings → Apps** (and in `chrome://webapks`). The share-sheet entry
+   appears once Android finishes minting the WebAPK (usually seconds).
+   Then: Gallery/Google Photos → select one **or many** photos → Share →
+   **Selphy Print**.
 3. A single shared photo opens the crop editor directly; bulk shares land in
    the queue — tap any photo to adjust its crop, rotation, or copy count.
 4. If you ever change `share_target` in the manifest, uninstall and reinstall
