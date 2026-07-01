@@ -115,9 +115,24 @@ Edit `docker-compose.yml` (printer IP), then `docker compose up -d`.
    Then: Gallery/Google Photos → select one **or many** photos → Share →
    **Selphy Print**.
 
-**Firefox / Vanadium / GrapheneOS (no WebAPK support — PWA share targets
-cannot work there; see GrapheneOS/Vanadium#714):** use the bundled
-**companion app** instead:
+**Firefox / Vanadium / GrapheneOS:** the browser-only path cannot work
+there — Android share-sheet entries exist only inside WebAPKs, and:
+
+- Firefox has no Web Share Target support at all;
+- Vanadium won't add WebAPKs since they're minted on Google's servers
+  ([Vanadium#714](https://github.com/GrapheneOS/Vanadium/issues/714),
+  [os-issue-tracker#2444](https://github.com/GrapheneOS/os-issue-tracker/issues/2444));
+- even real Chrome **with sandboxed Google Play** fails: the WebAPK install
+  flashes a dialog, silently falls back to a shortcut, and `chrome://webapks`
+  stays empty — open bug
+  [os-issue-tracker#6071](https://github.com/GrapheneOS/os-issue-tracker/issues/6071),
+  no known workaround. (The ecosystem fix would be an
+  [open minting server](https://bugs.chromium.org/p/chromium/issues/detail?id=1243583),
+  stalled for years.)
+
+Use the bundled **companion app** instead — functionally it *is* what a
+WebAPK would have been (a tiny APK with a share intent-filter), just built
+locally instead of by Google:
 
 1. On the phone, open the web app → printer status pill → *install the tiny
    companion app* (serves `selphy-share.apk`, ~26 kB, built from
@@ -150,10 +165,18 @@ updates — replace it if your repo is public.
 - "White border" renders to the printer's bordered printable area
   (2.5 mm sides / 3.7 mm ends) instead of full bleed — nothing is trimmed in
   that mode.
+- **Where the trimmed content physically goes** (postcard paper is
+  100×177 mm before you tear off the perforated stubs on the short ends):
+  the end-overflow (editor left/right) prints *onto the tear-off stubs*, so
+  you see it until you tear them — while the side-overflow (editor
+  top/bottom) is sprayed past the paper's long edges inside the printer and
+  is never visible. Both are real image loss; only one leaves evidence.
 - **Calibration:** tap the printer status pill → *Print calibration page*.
   The print carries mm rulers counted inward from each edge plus the letters
   **T/B/L/R** (hold it so T reads on top — that matches the crop editor's
-  orientation). The first readable tick next to each letter is your unit's
+  orientation). On the short ends, read the tick **at the tear-off
+  perforation**, not at the stub's outer edge. The first readable tick next
+  to each letter is your unit's
   real trim on that edge; enter the four values in the same sheet (stored per
   device in the browser and sent with every print job; server-wide defaults
   via `OVERSCAN_MM`). From then on every borderless print is pre-compensated
