@@ -1,14 +1,27 @@
-/* Service worker: app-shell cache + Web Share Target receiver. */
-const CACHE = 'selphy-shell-v1';
+/* Service worker: app-shell cache + Web Share Target receiver.
+   All URLs are resolved against the registration scope so the app works at
+   any mount point (site root, path-prefix proxies, …). */
+const CACHE = 'selphy-shell-v2';
+const SCOPE = self.registration.scope; // absolute, ends with '/'
+const scopeUrl = (p) => new URL(p, SCOPE).toString();
+
 const SHELL = [
-  '/',
-  '/app.js',
-  '/style.css',
-  '/db.js',
-  '/manifest.webmanifest',
-  '/icons/icon-192.png',
-  '/icons/icon-512.png',
-];
+  './',
+  'app.js',
+  'style.css',
+  'db.js',
+  'manifest.webmanifest',
+  'icons/icon-192.png',
+  'icons/icon-512.png',
+  'vendor/inter-400.woff2',
+  'vendor/inter-500.woff2',
+  'vendor/inter-600.woff2',
+  'vendor/inter-700.woff2',
+].map(scopeUrl);
+
+const SHARE_PATH = new URL('share-target', SCOPE).pathname;
+const API_PREFIX = new URL('api/', SCOPE).pathname;
+const ROOT_PATH = new URL(SCOPE).pathname;
 
 self.addEventListener('install', (evt) => {
   evt.waitUntil(
@@ -28,17 +41,17 @@ self.addEventListener('fetch', (evt) => {
   const url = new URL(evt.request.url);
 
   // Web Share Target: Android POSTs the shared images here.
-  if (evt.request.method === 'POST' && url.pathname === '/share-target') {
+  if (evt.request.method === 'POST' && url.pathname === SHARE_PATH) {
     evt.respondWith(handleShare(evt));
     return;
   }
 
   if (evt.request.method !== 'GET') return;
   // Network-first for API, cache-first for the shell.
-  if (url.pathname.startsWith('/api/')) return;
+  if (url.pathname.startsWith(API_PREFIX)) return;
 
   evt.respondWith(
-    caches.match(evt.request, { ignoreSearch: url.pathname === '/' }).then(
+    caches.match(evt.request, { ignoreSearch: url.pathname === ROOT_PATH }).then(
       (hit) =>
         hit ||
         fetch(evt.request).then((res) => {
@@ -66,7 +79,7 @@ async function handleShare(evt) {
     // Fall through to the app; it will show an empty state.
     console.error('share-target error', err);
   }
-  return Response.redirect('/?shared=' + Date.now(), 303);
+  return Response.redirect(scopeUrl('./?shared=' + Date.now()), 303);
 }
 
 function notifyClients(ids) {
@@ -75,7 +88,7 @@ function notifyClients(ids) {
   } catch {}
 }
 
-/* Minimal IndexedDB access — kept in sync with /db.js (same DB/schema). */
+/* Minimal IndexedDB access — kept in sync with ./db.js (same DB/schema). */
 const DB_NAME = 'selphy';
 const STORE = 'inbox';
 

@@ -1,4 +1,6 @@
-import { inboxAdd, inboxAll, inboxDelete } from '/db.js';
+// All URLs in this app are relative so it works at any mount point
+// (reverse-proxy root, path-prefix dev proxies, etc.).
+import { inboxAdd, inboxAll, inboxDelete } from './db.js';
 
 /* ---------- state ---------- */
 
@@ -23,7 +25,7 @@ const actionbar = $('actionbar');
 /* ---------- boot ---------- */
 
 if ('serviceWorker' in navigator) {
-  navigator.serviceWorker.register('/sw.js');
+  navigator.serviceWorker.register('sw.js');
 }
 
 try {
@@ -58,7 +60,7 @@ setInterval(pollStatus, 10000);
 $('printer-status').addEventListener('click', async () => {
   if (!confirm('Print a calibration page? It uses one sheet of paper.')) return;
   try {
-    const res = await fetch('/api/calibrate', { method: 'POST' });
+    const res = await fetch('api/calibrate', { method: 'POST' });
     if (!res.ok) throw new Error(await res.text());
     toast('Calibration page queued — read the first visible mm tick on each edge');
   } catch (err) {
@@ -70,20 +72,20 @@ $('printer-status').addEventListener('click', async () => {
 // share, SW update race), pull the files down into the local inbox.
 async function drainServerInbox() {
   try {
-    const res = await fetch('/api/inbox');
+    const res = await fetch('api/inbox');
     if (!res.ok) return;
     const { items } = await res.json();
     for (const it of items) {
-      const blob = await (await fetch(`/api/inbox/${it.id}`)).blob();
+      const blob = await (await fetch(`api/inbox/${it.id}`)).blob();
       await inboxAdd([new File([blob], it.name || 'shared.jpg', { type: blob.type })]);
-      await fetch(`/api/inbox/${it.id}`, { method: 'DELETE' });
+      await fetch(`api/inbox/${it.id}`, { method: 'DELETE' });
     }
   } catch {}
 }
 
 async function fetchConfig() {
   try {
-    const res = await fetch('/api/config');
+    const res = await fetch('api/config');
     if (!res.ok) return;
     const cfg = await res.json();
     if (cfg.paper) paper = cfg.paper;
@@ -387,7 +389,7 @@ async function printAll() {
           border,
         })
       );
-      const res = await fetch('/api/print', { method: 'POST', body: form });
+      const res = await fetch('api/print', { method: 'POST', body: form });
       if (!res.ok) throw new Error((await res.text()) || res.statusText);
       const { jobId } = await res.json();
       item.stateText = 'printing…';
@@ -441,7 +443,7 @@ async function cropForPrint(item) {
 
 async function waitForJob(jobId, item) {
   for (let i = 0; i < 900; i++) {
-    const res = await fetch(`/api/jobs/${jobId}`);
+    const res = await fetch(`api/jobs/${jobId}`);
     if (!res.ok) throw new Error('lost track of job');
     const job = await res.json();
     if (job.state === 'done') return;
@@ -459,7 +461,7 @@ async function pollStatus() {
   const dot = $('status-dot');
   const text = $('status-text');
   try {
-    const res = await fetch('/api/printer');
+    const res = await fetch('api/printer');
     if (!res.ok) throw 0;
     const s = await res.json();
     dot.className = 'dot ' + (s.reachable ? (s.stateReasons?.length ? 'warn' : 'ok') : 'err');
