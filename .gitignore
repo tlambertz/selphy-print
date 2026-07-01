@@ -1,0 +1,5 @@
+node_modules/
+*.log
+result
+# fetched via scripts/fetch-profile.sh — redistribution terms unclear
+profiles/*.icc

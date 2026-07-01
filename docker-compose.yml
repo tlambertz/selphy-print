@@ -1,0 +1,12 @@
+services:
+  selphy-print:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      PRINTER_HOST: "192.168.1.42" # <- your CP1500's IP or CP1500xxxxxx.local
+      ICC_PROFILE: /profiles/CP1500-farbenwerk.icc
+      ICC_INTENT: perceptual # or: relative (more accurate in-gamut, may clip saturated colors)
+    volumes:
+      - ./profiles:/profiles:ro

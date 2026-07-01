@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>Selphy Print</title>
+  <meta name="theme-color" content="#101014" />
+  <link rel="manifest" href="/manifest.webmanifest" />
+  <link rel="icon" href="/icons/icon-192.png" />
+  <link rel="apple-touch-icon" href="/icons/icon-192.png" />
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+  <header id="topbar">
+    <div id="printer-status" title="Printer status">
+      <span class="dot" id="status-dot"></span>
+      <span id="status-text">connecting…</span>
+    </div>
+    <div class="spacer"></div>
+    <button id="btn-clear" class="ghost" hidden>Clear</button>
+    <label class="ghost btn" for="file-input">＋ Add</label>
+    <input type="file" id="file-input" accept="image/*" multiple hidden />
+  </header>
+
+  <main id="queue">
+    <div id="empty-state">
+      <div class="empty-art">🖼️ → 🖨️</div>
+      <p><strong>No photos queued.</strong></p>
+      <p>Share images to this app from your gallery,<br />or tap <b>＋ Add</b> above.</p>
+    </div>
+    <div id="grid"></div>
+  </main>
+
+  <footer id="actionbar" hidden>
+    <div id="print-opts">
+      <label class="toggle">
+        <input type="checkbox" id="opt-border" />
+        <span>White border</span>
+      </label>
+    </div>
+    <button id="btn-print" class="primary">Print all</button>
+  </footer>
+
+  <!-- Crop editor overlay -->
+  <div id="editor" hidden>
+    <div id="editor-stage">
+      <canvas id="editor-canvas"></canvas>
+      <div id="crop-frame">
+        <div id="overscan-guide" title="Anything outside this line may be trimmed by the printer"></div>
+      </div>
+    </div>
+    <div id="editor-bar">
+      <button id="ed-cancel" class="ghost">Cancel</button>
+      <button id="ed-rotate" class="ghost" title="Rotate 90°">⟳ Rotate</button>
+      <div class="copies">
+        <button id="ed-copies-minus" class="ghost">−</button>
+        <span id="ed-copies">1×</span>
+        <button id="ed-copies-plus" class="ghost">＋</button>
+      </div>
+      <button id="ed-done" class="primary">Done</button>
+    </div>
+    <p id="editor-hint">Drag to move · pinch or scroll to zoom · dashed line = safe area for borderless</p>
+  </div>
+
+  <div id="toast" hidden></div>
+
+  <script type="module" src="/app.js"></script>
+</body>
+</html>

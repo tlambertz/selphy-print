@@ -1,0 +1,183 @@
+:root {
+  --bg: #101014;
+  --panel: #1a1a20;
+  --panel-2: #24242c;
+  --text: #f0f0f4;
+  --muted: #9a9aa6;
+  --accent: #e8455f;
+  --ok: #3ecf6f;
+  --warn: #f5b942;
+  --err: #ef5350;
+  --radius: 14px;
+}
+* { box-sizing: border-box; }
+html, body {
+  margin: 0;
+  height: 100%;
+  background: var(--bg);
+  color: var(--text);
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  overscroll-behavior: none;
+}
+body { display: flex; flex-direction: column; }
+
+#topbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: calc(env(safe-area-inset-top, 0px) + 12px) 16px 12px;
+  background: var(--panel);
+}
+#printer-status { display: flex; align-items: center; gap: 8px; font-size: 14px; color: var(--muted); }
+.dot { width: 10px; height: 10px; border-radius: 50%; background: var(--muted); flex: none; }
+.dot.ok { background: var(--ok); }
+.dot.warn { background: var(--warn); }
+.dot.err { background: var(--err); }
+.spacer { flex: 1; }
+
+button, .btn {
+  font: inherit;
+  border: none;
+  border-radius: var(--radius);
+  padding: 10px 16px;
+  cursor: pointer;
+  background: var(--panel-2);
+  color: var(--text);
+}
+button.primary, .btn.primary {
+  background: var(--accent);
+  color: #fff;
+  font-weight: 600;
+}
+button.ghost, .btn.ghost { background: transparent; color: var(--muted); }
+button:disabled { opacity: 0.4; cursor: default; }
+
+#queue { flex: 1; overflow-y: auto; padding: 12px; }
+#empty-state {
+  text-align: center;
+  color: var(--muted);
+  margin-top: 18vh;
+  line-height: 1.5;
+}
+.empty-art { font-size: 40px; margin-bottom: 12px; }
+
+#grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 10px;
+}
+.card {
+  position: relative;
+  border-radius: var(--radius);
+  overflow: hidden;
+  background: var(--panel);
+  aspect-ratio: 148 / 100;
+  cursor: pointer;
+}
+.card img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.card .badge {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  background: rgba(0, 0, 0, 0.65);
+  border-radius: 8px;
+  font-size: 12px;
+  padding: 2px 8px;
+}
+.card .remove {
+  position: absolute;
+  top: 6px;
+  left: 6px;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.65);
+  color: #fff;
+  padding: 0;
+  line-height: 26px;
+  text-align: center;
+}
+.card .state {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  font-size: 12px;
+  padding: 3px 8px;
+  background: rgba(0, 0, 0, 0.65);
+  color: var(--muted);
+}
+.card .state.printing { color: var(--warn); }
+.card .state.done { color: var(--ok); }
+.card .state.error { color: var(--err); }
+
+#actionbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 16px calc(env(safe-area-inset-bottom, 0px) + 12px);
+  background: var(--panel);
+}
+#actionbar .toggle { display: flex; align-items: center; gap: 6px; font-size: 14px; color: var(--muted); }
+#btn-print { flex: 1; padding: 14px; font-size: 16px; }
+
+/* Crop editor */
+#editor {
+  position: fixed;
+  inset: 0;
+  background: #000;
+  display: flex;
+  flex-direction: column;
+  z-index: 10;
+}
+#editor[hidden] { display: none; }
+#editor-stage {
+  position: relative;
+  flex: 1;
+  overflow: hidden;
+  touch-action: none;
+}
+#editor-canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
+#crop-frame {
+  position: absolute;
+  border: 1.5px solid rgba(255, 255, 255, 0.9);
+  box-shadow: 0 0 0 4000px rgba(0, 0, 0, 0.55);
+  pointer-events: none;
+}
+#overscan-guide {
+  position: absolute;
+  border: 1.5px dashed rgba(255, 255, 255, 0.55);
+  pointer-events: none;
+}
+#editor-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  background: var(--panel);
+}
+#editor-bar .copies { display: flex; align-items: center; gap: 2px; margin-left: auto; }
+#ed-copies { min-width: 34px; text-align: center; font-variant-numeric: tabular-nums; }
+#ed-done { min-width: 90px; }
+#editor-hint {
+  margin: 0;
+  padding: 6px 14px calc(env(safe-area-inset-bottom, 0px) + 8px);
+  background: var(--panel);
+  color: var(--muted);
+  font-size: 12px;
+  text-align: center;
+}
+
+#toast {
+  position: fixed;
+  bottom: 90px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--panel-2);
+  border-radius: 10px;
+  padding: 10px 18px;
+  font-size: 14px;
+  z-index: 20;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+  max-width: 90vw;
+}
