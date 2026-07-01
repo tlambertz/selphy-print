@@ -1,11 +1,13 @@
-/* Frontend e2e against a running server (PORT 8080) + mock IPP printer.
-   Usage: node test/e2e.test.mjs */
+/* Frontend e2e — MUST point at a server wired to the MOCK printer
+   (ippeveprinter), never the real one: it submits actual print jobs.
+   The 'testselphy' status assertion below guards against that.
+   Usage: node test/e2e.test.mjs [baseUrl]   (default http://localhost:8081) */
 import puppeteer from 'puppeteer';
 import sharp from 'sharp';
 import { strict as assert } from 'node:assert';
 import { writeFile, rm } from 'node:fs/promises';
 
-const BASE = 'http://localhost:8080';
+const BASE = process.argv[2] || 'http://localhost:8081';
 const browser = await puppeteer.launch({ args: ['--no-sandbox'] });
 const page = await browser.newPage();
 await page.setViewport({ width: 412, height: 915 }); // phone-ish

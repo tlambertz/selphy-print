@@ -1,7 +1,7 @@
 /* Service worker: app-shell cache + Web Share Target receiver.
    All URLs are resolved against the registration scope so the app works at
    any mount point (site root, path-prefix proxies, …). */
-const CACHE = 'selphy-shell-v2';
+const CACHE = 'selphy-shell-v3';
 const SCOPE = self.registration.scope; // absolute, ends with '/'
 const scopeUrl = (p) => new URL(p, SCOPE).toString();
 
@@ -47,21 +47,29 @@ self.addEventListener('fetch', (evt) => {
   }
 
   if (evt.request.method !== 'GET') return;
-  // Network-first for API, cache-first for the shell.
+  // API is never cached.
   if (url.pathname.startsWith(API_PREFIX)) return;
 
+  // Everything is network-first with cache fallback: the server is on the
+  // LAN so latency is negligible, updates appear on next load without cache
+  // version bumps, and the cache still makes the app open when the server is
+  // down (queue/crop work offline; printing obviously needs the server).
+  const isNavigation = evt.request.mode === 'navigate' || url.pathname === ROOT_PATH;
+
   evt.respondWith(
-    caches.match(evt.request, { ignoreSearch: url.pathname === ROOT_PATH }).then(
-      (hit) =>
-        hit ||
-        fetch(evt.request).then((res) => {
-          if (res.ok && url.origin === self.location.origin) {
-            const copy = res.clone();
-            caches.open(CACHE).then((c) => c.put(evt.request, copy));
-          }
-          return res;
-        })
-    )
+    fetch(evt.request)
+      .then((res) => {
+        if (res.ok && url.origin === self.location.origin) {
+          const copy = res.clone();
+          caches.open(CACHE).then((c) => c.put(evt.request, copy));
+        }
+        return res;
+      })
+      .catch(() =>
+        caches
+          .match(evt.request, { ignoreSearch: isNavigation })
+          .then((hit) => hit || Response.error())
+      )
   );
 });
 

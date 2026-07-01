@@ -68,6 +68,20 @@
               default = "perceptual";
             };
 
+            # Default safe-area insets (borderless trim) in mm per edge;
+            # measure with the in-app calibration page.
+            overscanSidesMm = lib.mkOption {
+              type = lib.types.float;
+              default = 3.5;
+              description = "Borderless trim on the 100 mm edges.";
+            };
+
+            overscanEndsMm = lib.mkOption {
+              type = lib.types.float;
+              default = 5.5;
+              description = "Borderless trim on the 148 mm edges.";
+            };
+
             openFirewall = lib.mkOption {
               type = lib.types.bool;
               default = false;
@@ -84,6 +98,8 @@
                 PORT = toString cfg.port;
                 PRINTER_HOST = cfg.printerHost;
                 ICC_INTENT = cfg.iccIntent;
+                OVERSCAN_SIDES_MM = toString cfg.overscanSidesMm;
+                OVERSCAN_ENDS_MM = toString cfg.overscanEndsMm;
               } // lib.optionalAttrs (cfg.iccProfile != null) {
                 ICC_PROFILE = toString cfg.iccProfile;
               };
