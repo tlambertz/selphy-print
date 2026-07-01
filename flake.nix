@@ -68,18 +68,14 @@
               default = "perceptual";
             };
 
-            # Default safe-area insets (borderless trim) in mm per edge;
-            # measure with the in-app calibration page.
-            overscanSidesMm = lib.mkOption {
-              type = lib.types.float;
-              default = 3.5;
-              description = "Borderless trim on the 100 mm edges.";
-            };
-
-            overscanEndsMm = lib.mkOption {
-              type = lib.types.float;
-              default = 5.5;
-              description = "Borderless trim on the 148 mm edges.";
+            # Borderless trim per edge in mm, "top,bottom,left,right" in the
+            # crop editor's orientation — measure with the in-app calibration
+            # page (T/B/L/R letters). null = built-in defaults.
+            overscanMm = lib.mkOption {
+              type = lib.types.nullOr lib.types.str;
+              default = null;
+              example = "2.5,2.5,4.2,5.8";
+              description = "Safe-area insets, top,bottom,left,right in mm.";
             };
 
             openFirewall = lib.mkOption {
@@ -98,8 +94,8 @@
                 PORT = toString cfg.port;
                 PRINTER_HOST = cfg.printerHost;
                 ICC_INTENT = cfg.iccIntent;
-                OVERSCAN_SIDES_MM = toString cfg.overscanSidesMm;
-                OVERSCAN_ENDS_MM = toString cfg.overscanEndsMm;
+              } // lib.optionalAttrs (cfg.overscanMm != null) {
+                OVERSCAN_MM = cfg.overscanMm;
               } // lib.optionalAttrs (cfg.iccProfile != null) {
                 ICC_PROFILE = toString cfg.iccProfile;
               };

@@ -12,13 +12,16 @@ let paper = {
   mm: { w: 148, h: 100 },
   page: { w: 1748, h: 1181 }, // landscape px @300dpi
 };
-let overscan = { sidesMm: 3.5, endsMm: 5.5 }; // server default; calibratable
+// Per-edge trim in page-mm, in editor orientation (matches the T/B/L/R
+// letters printed on the calibration page). Server default; calibratable.
+let overscan = { top: 3.5, bottom: 3.5, left: 5.5, right: 5.5 };
 
-const OVERSCAN_KEY = 'selphy-overscan';
+const OVERSCAN_KEY = 'selphy-overscan-v2';
+const EDGES = ['top', 'bottom', 'left', 'right'];
 function effectiveOverscan() {
   try {
     const saved = JSON.parse(localStorage.getItem(OVERSCAN_KEY));
-    if (saved && isFinite(saved.sidesMm) && isFinite(saved.endsMm)) return saved;
+    if (saved && EDGES.every((e) => isFinite(saved[e]))) return saved;
   } catch {}
   return overscan;
 }
@@ -70,9 +73,8 @@ setInterval(pollStatus, 10000);
 // Printer sheet: status details + borderless-trim calibration.
 $('printer-status').addEventListener('click', () => {
   const os = effectiveOverscan();
-  $('cal-sides').value = os.sidesMm;
-  $('cal-ends').value = os.endsMm;
-  $('cal-defaults').textContent = `${overscan.sidesMm} mm sides, ${overscan.endsMm} mm ends`;
+  for (const e of EDGES) $('cal-' + e).value = os[e];
+  $('cal-defaults').textContent = EDGES.map((e) => `${e[0].toUpperCase()} ${overscan[e]}`).join(' · ') + ' mm';
   $('settings-printer').textContent = $('status-text').textContent;
   $('settings').hidden = false;
 });
@@ -91,13 +93,13 @@ $('btn-calibrate').addEventListener('click', async () => {
 });
 
 $('cal-save').addEventListener('click', () => {
-  const sidesMm = parseFloat($('cal-sides').value);
-  const endsMm = parseFloat($('cal-ends').value);
-  if (!isFinite(sidesMm) || !isFinite(endsMm) || sidesMm < 0 || endsMm < 0 || sidesMm > 12 || endsMm > 12) {
+  const values = {};
+  for (const e of EDGES) values[e] = parseFloat($('cal-' + e).value);
+  if (!EDGES.every((e) => isFinite(values[e]) && values[e] >= 0 && values[e] <= 12)) {
     toast('Enter trim values between 0 and 12 mm');
     return;
   }
-  localStorage.setItem(OVERSCAN_KEY, JSON.stringify({ sidesMm, endsMm }));
+  localStorage.setItem(OVERSCAN_KEY, JSON.stringify(values));
   $('settings').hidden = true;
   toast('Safe area updated for this device');
 });
@@ -287,13 +289,15 @@ function layoutEditor() {
   // Safe-area guide: the page region that survives the firmware's borderless
   // enlargement, inset per edge by the measured trim (page-mm → frame px).
   const os = effectiveOverscan();
-  const ix = (os.endsMm / paper.mm.w) * fw; // long dimension = "ends"
-  const iy = (os.sidesMm / paper.mm.h) * fh; // short dimension = "sides"
+  const insL = (os.left / paper.mm.w) * fw;
+  const insR = (os.right / paper.mm.w) * fw;
+  const insT = (os.top / paper.mm.h) * fh;
+  const insB = (os.bottom / paper.mm.h) * fh;
   Object.assign(guideEl.style, {
-    left: ix + 'px',
-    top: iy + 'px',
-    width: fw - 2 * ix + 'px',
-    height: fh - 2 * iy + 'px',
+    left: insL + 'px',
+    top: insT + 'px',
+    width: fw - insL - insR + 'px',
+    height: fh - insT - insB + 'px',
   });
 }
 

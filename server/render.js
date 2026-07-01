@@ -138,13 +138,22 @@ export async function renderCalibration(page, dpi = 300) {
     }
   }
 
+  // Edge letters in editor orientation (landscape page) so readings map
+  // unambiguously to the app's T/B/L/R calibration fields.
+  const lm = 20 * pxPerMm; // letters 20 mm in: safely inside any trim
+  const letters = `
+  <text x="${w / 2}" y="${lm}" font-size="72" font-weight="bold" font-family="monospace" fill="#000" text-anchor="middle" dominant-baseline="middle">T</text>
+  <text x="${w / 2}" y="${h - lm}" font-size="72" font-weight="bold" font-family="monospace" fill="#000" text-anchor="middle" dominant-baseline="middle">B</text>
+  <text x="${lm}" y="${h / 2 + 90}" font-size="72" font-weight="bold" font-family="monospace" fill="#000" text-anchor="middle" dominant-baseline="middle">L</text>
+  <text x="${w - lm}" y="${h / 2 + 90}" font-size="72" font-weight="bold" font-family="monospace" fill="#000" text-anchor="middle" dominant-baseline="middle">R</text>`;
+
   const border = `<rect x="1" y="1" width="${w - 2}" height="${h - 2}" fill="none" stroke="#000" stroke-width="2"/>`;
   const text = `<text x="${w / 2}" y="${h / 2 - 90}" font-size="34" font-family="monospace" fill="#000" text-anchor="middle">selphy-print calibration</text>
-  <text x="${w / 2}" y="${h / 2 - 40}" font-size="26" font-family="monospace" fill="#000" text-anchor="middle">short edges = "ends", long edges = "sides"</text>
+  <text x="${w / 2}" y="${h / 2 - 40}" font-size="26" font-family="monospace" fill="#000" text-anchor="middle">hold so that T reads on top</text>
   <text x="${w / 2}" y="${h / 2 + 70}" font-size="26" font-family="monospace" fill="#000" text-anchor="middle">first readable tick per edge = trimmed mm</text>
-  <text x="${w / 2}" y="${h / 2 + 110}" font-size="26" font-family="monospace" fill="#000" text-anchor="middle">enter it in the app under Printer &gt; Calibration</text>`;
+  <text x="${w / 2}" y="${h / 2 + 110}" font-size="26" font-family="monospace" fill="#000" text-anchor="middle">enter T/B/L/R in the app under Printer &gt; Calibration</text>`;
 
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}"><rect width="100%" height="100%" fill="#fff"/>${border}${ticks.join('')}${text}</svg>`;
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}"><rect width="100%" height="100%" fill="#fff"/>${border}${ticks.join('')}${letters}${text}</svg>`;
 
   return sharp(Buffer.from(svg))
     .rotate(90)

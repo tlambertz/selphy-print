@@ -34,22 +34,33 @@ const PAPERS = {
   },
 };
 
-/* Default borderless trim per edge in page-mm.
+/* Default borderless trim per edge in page-mm, in EDITOR orientation
+ * (landscape page as shown in the crop UI; the calibration page prints the
+ * letters T/B/L/R so readings are unambiguous). top/bottom are the 100 mm
+ * "sides", left/right the 148 mm "ends".
  *
  * Theory (canvas/page arithmetic): uniform firmware enlargement loses
  * 3.31 mm per 100 mm-side and 4.90 mm per 148 mm-end; anisotropic stretch
  * would lose 2.68/4.90. Which one the firmware does is unmeasured — the
  * difference (~0.6 mm) is below the ±1 mm mechanical registration variance
- * units exhibit anyway.
+ * units exhibit anyway (feed offset makes opposite ends differ by ~1–2 mm).
  *
  * Measurements (CP1000/CP1300/CP1500 community grids): sides 2.5–4.5 mm,
- * ends 4–6 mm, per-unit asymmetry up to ~1 mm. Defaults below cover all
- * measured reports; per-unit truth comes from the calibration page (UI) or
- * these env vars. */
-const overscan = {
-  sidesMm: parseFloat(env.OVERSCAN_SIDES_MM || '3.5'),
-  endsMm: parseFloat(env.OVERSCAN_ENDS_MM || '5.5'),
-};
+ * ends 4–6 mm. Defaults below cover the measured range; per-unit truth comes
+ * from the calibration page (entered in the UI, or via env:
+ * OVERSCAN_MM="top,bottom,left,right", or symmetric
+ * OVERSCAN_SIDES_MM/OVERSCAN_ENDS_MM). */
+function parseOverscan() {
+  if (env.OVERSCAN_MM) {
+    const [top, bottom, left, right] = env.OVERSCAN_MM.split(',').map(Number);
+    if ([top, bottom, left, right].every(isFinite)) return { top, bottom, left, right };
+    throw new Error('OVERSCAN_MM must be four numbers: "top,bottom,left,right"');
+  }
+  const sides = parseFloat(env.OVERSCAN_SIDES_MM || '3.5');
+  const ends = parseFloat(env.OVERSCAN_ENDS_MM || '5.5');
+  return { top: sides, bottom: sides, left: ends, right: ends };
+}
+const overscan = parseOverscan();
 
 export const config = {
   port: parseInt(env.PORT || '8080', 10),

@@ -83,8 +83,8 @@ Edit `docker-compose.yml` (printer IP), then `docker compose up -d`.
 | `ICC_INTENT`    | `perceptual` | `perceptual` (smooth, saturated photos) or `relative` (accurate in-gamut, + black point compensation) |
 | `PORT` / `HOST` | `8080` / `0.0.0.0` | Listen address |
 | `PRINT_SCALING` | `none`       | IPP print-scaling; images are sent at exactly page size so `none` = 1:1 placement |
-| `OVERSCAN_SIDES_MM` | `3.5`    | Default safe-area inset per 100 mm edge (borderless trim) |
-| `OVERSCAN_ENDS_MM`  | `5.5`    | Default safe-area inset per 148 mm edge |
+| `OVERSCAN_MM`   | –            | Per-edge safe-area insets `"top,bottom,left,right"` in mm (crop-editor orientation, matches the calibration page's T/B/L/R letters) |
+| `OVERSCAN_SIDES_MM` / `OVERSCAN_ENDS_MM` | `3.5` / `5.5` | Symmetric fallback when `OVERSCAN_MM` is unset |
 | `JPEG_QUALITY`  | `95`         | Quality of the JPEG sent to the printer |
 
 ## Printer setup (once)
@@ -119,11 +119,13 @@ Edit `docker-compose.yml` (printer IP), then `docker compose up -d`.
   (2.5 mm sides / 3.7 mm ends) instead of full bleed — nothing is trimmed in
   that mode.
 - **Calibration:** tap the printer status pill → *Print calibration page*.
-  The print carries mm rulers counted inward from each page edge; the first
-  readable tick per edge is your unit's real trim. Enter the two values in the
-  same sheet (stored per device in the browser; server-wide defaults via
-  `OVERSCAN_SIDES_MM` / `OVERSCAN_ENDS_MM`). The safe-area guide updates
-  immediately.
+  The print carries mm rulers counted inward from each edge plus the letters
+  **T/B/L/R** (hold it so T reads on top — that matches the crop editor's
+  orientation). The first readable tick next to each letter is your unit's
+  real trim on that edge; enter the four values in the same sheet (stored per
+  device in the browser; server-wide via `OVERSCAN_MM`). The safe-area guide
+  updates immediately. Opposite edges genuinely differ (~1–2 mm feed offset),
+  which is why calibration is per edge.
 
 ## Color notes
 

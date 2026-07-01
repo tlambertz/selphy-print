@@ -8,7 +8,8 @@ services:
       PRINTER_HOST: "192.168.1.42" # <- your CP1500's IP or CP1500xxxxxx.local
       ICC_PROFILE: /profiles/CP1500-farbenwerk.icc
       ICC_INTENT: perceptual # or: relative (more accurate in-gamut, may clip saturated colors)
-      OVERSCAN_SIDES_MM: "3.5" # borderless trim on the 100 mm edges — measure with the in-app calibration page
-      OVERSCAN_ENDS_MM: "6.0" # borderless trim on the 148 mm edges (worst edge)
+      # Borderless trim "top,bottom,left,right" in mm (crop-editor orientation);
+      # measure with the in-app calibration page (T/B/L/R letters)
+      OVERSCAN_MM: "2.5,2.5,4.2,5.8"
     volumes:
       - ./profiles:/profiles:ro
