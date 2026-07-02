@@ -272,12 +272,17 @@ app.post('/api/preview', async (req, reply) => {
   const icc = options.icc === false ? {} : config.icc;
   const plan = buildRenderPlan(options);
   const rotate = [0, 90, 180, 270].includes(options.rotate) ? options.rotate : 0;
-  const jpeg = await renderForPrint(imageBuf, {
+  // Render to raw pixels (lossless; ICC via tificc) and encode the preview
+  // ONCE, at the same near-lossless q100/4:4:4 as the print — otherwise a
+  // second q90/4:2:0 pass would add chroma ringing the real print never has.
+  const { rgb, width, height } = await renderForPrint(imageBuf, {
     crop: options.crop || null, rotate, target: plan.target, bleed: plan.bleed,
-    padWhite: plan.padWhite, icc, output: 'jpeg',
+    padWhite: plan.padWhite, icc, output: 'raw',
   });
-  // Print render is portrait (short edge first); rotate back for on-screen view.
-  const landscape = await sharp(jpeg).rotate(270).jpeg({ quality: 90 }).toBuffer();
+  const landscape = await sharp(rgb, { raw: { width, height, channels: 3 } })
+    .rotate(270) // print render is portrait (short edge first); show landscape
+    .jpeg({ quality: 100, chromaSubsampling: '4:4:4', progressive: false })
+    .toBuffer();
   reply.header('cache-control', 'no-store');
   reply.type('image/jpeg');
   return landscape;

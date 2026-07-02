@@ -121,7 +121,9 @@ export const config = {
   icc: {
     profile: env.ICC_PROFILE || null, // absolute path to .icc, empty = no color management
     intent: env.ICC_INTENT || 'perceptual', // perceptual | relative | saturation | absolute
-    quality: parseInt(env.JPEG_QUALITY || '95', 10),
+    // The head canvas is only 1248×1872, so file size is a non-issue on the
+    // LAN — encode near-lossless (q100, 4:4:4) to keep dye-sub gradients clean.
+    quality: parseInt(env.JPEG_QUALITY || '100', 10),
   },
 
   /* Transport, learned the hard way on real hardware (and re-learned twice:

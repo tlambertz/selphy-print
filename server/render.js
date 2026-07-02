@@ -35,7 +35,7 @@ const execFileP = promisify(execFile);
 //    risk a double-convert); ICC is pre-applied into the pixels via tificc.
 //  - 300 dpi JFIF density: cosmetic (the firmware scales by pixel count and
 //    ignores this) but correct for any other viewer of the same bytes.
-async function encodeJpeg(pipeline, quality = 95) {
+async function encodeJpeg(pipeline, quality = 100) {
   const jpeg = await pipeline
     .jpeg({ quality, chromaSubsampling: '4:4:4', progressive: false })
     .toBuffer();
@@ -334,5 +334,5 @@ export async function renderCalibration(page, dpi = 300, output = 'jpeg', pad = 
   }
   // Same baseline / 4:4:4 / 300-dpi encode as photo prints, so the calibration
   // sheet travels the identical JPEG path it is meant to characterize.
-  return encodeJpeg(portrait, 97);
+  return encodeJpeg(portrait, 100);
 }
