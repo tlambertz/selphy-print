@@ -148,6 +148,12 @@ export async function renderForPrint(input, opts) {
     .toBuffer();
   let portrait = sharp(page).rotate(90); // printer feeds portrait, short edge first
 
+  // Optional brightness tweak (multiplier, 1 = neutral), applied in sRGB before
+  // any ICC conversion — i.e. it brightens the image the profile then maps,
+  // exactly like nudging exposure in an editor. Covers all output paths.
+  const brightness = opts.brightness ?? 1;
+  if (brightness !== 1) portrait = portrait.modulate({ brightness });
+
   if (opts.output === 'raw') {
     let tiff = await portrait.removeAlpha().tiff({ compression: 'none' }).toBuffer();
     if (icc.profile) tiff = await applyIccTiff(tiff, icc);

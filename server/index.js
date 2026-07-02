@@ -246,6 +246,13 @@ function resolveIcc(options) {
   return { profile: entry.path, intent: config.icc.intent, quality: config.icc.quality };
 }
 
+// Brightness as a modulate multiplier from options.brightness (percent, e.g.
+// +20 → 1.20). Clamped to ±60%; 1 = neutral.
+function brightnessFactor(options) {
+  const pct = Math.max(-60, Math.min(60, Number(options.brightness) || 0));
+  return 1 + pct / 100;
+}
+
 // Parse the multipart body of a print/preview request: the image + options.
 async function parsePrintRequest(req) {
   let imageBuf = null;
@@ -272,6 +279,7 @@ app.post('/api/print', async (req, reply) => {
   const copies = Math.min(Math.max(parseInt(options.copies, 10) || 1, 1), 99);
   // ICC is on unless the client explicitly opts out (color A/B testing).
   const icc = resolveIcc(options);
+  const brightness = brightnessFactor(options);
   const plan = buildRenderPlan(options);
   const rotate = [0, 90, 180, 270].includes(options.rotate) ? options.rotate : 0;
   const crop = options.crop || null;
@@ -284,7 +292,7 @@ app.post('/api/print', async (req, reply) => {
     if (config.printFormat === 'cpnp') {
       const cv = config.paper.canvas;
       const jpeg = await renderForPrint(imageBuf, {
-        crop, rotate, target: plan.target, bleed: plan.bleed, padWhite: plan.padWhite, icc, output: 'jpeg',
+        crop, rotate, target: plan.target, bleed: plan.bleed, padWhite: plan.padWhite, icc, brightness, output: 'jpeg',
       });
       await archivePrint(job.id, imageBuf, originalFmt, jpeg);
       const host = new URL(printerUrl()).hostname;
@@ -301,7 +309,7 @@ app.post('/api/print', async (req, reply) => {
     }
 
     const rendered = await renderForPrint(imageBuf, {
-      crop, rotate, target: plan.target, bleed: plan.bleed, padWhite: plan.padWhite, icc,
+      crop, rotate, target: plan.target, bleed: plan.bleed, padWhite: plan.padWhite, icc, brightness,
       output: plan.raster ? 'raw' : 'jpeg',
     });
     if (plan.raster) {
@@ -334,6 +342,7 @@ app.post('/api/preview', async (req, reply) => {
   if (!imageBuf) return reply.code(400).send('missing image');
 
   const icc = resolveIcc(options);
+  const brightness = brightnessFactor(options);
   const plan = buildRenderPlan(options);
   const rotate = [0, 90, 180, 270].includes(options.rotate) ? options.rotate : 0;
   // Render to raw pixels (lossless; ICC via tificc) and encode the preview
@@ -341,7 +350,7 @@ app.post('/api/preview', async (req, reply) => {
   // second q90/4:2:0 pass would add chroma ringing the real print never has.
   const { rgb, width, height } = await renderForPrint(imageBuf, {
     crop: options.crop || null, rotate, target: plan.target, bleed: plan.bleed,
-    padWhite: plan.padWhite, icc, output: 'raw',
+    padWhite: plan.padWhite, icc, brightness, output: 'raw',
   });
   const landscape = await sharp(rgb, { raw: { width, height, channels: 3 } })
     .rotate(270) // print render is portrait (short edge first); show landscape

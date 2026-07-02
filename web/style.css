@@ -664,6 +664,9 @@ body {
   cursor: pointer;
 }
 .cal-select:disabled { opacity: 0.55; cursor: default; }
+.bright-ctl { display: flex; align-items: center; gap: 10px; flex: 1; max-width: 62%; }
+.bright-ctl input[type='range'] { flex: 1; accent-color: var(--accent); }
+#opt-bright-val { min-width: 42px; text-align: right; font-weight: 600; color: var(--text); font-size: 13px; }
 
 .sheet-actions {
   display: flex;

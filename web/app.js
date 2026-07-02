@@ -62,6 +62,17 @@ function iccChoice() {
   if (saved !== null) return saved;
   return iccDefault || '';
 }
+// Brightness (percent, per device): brightens before ICC. 0 = neutral.
+const BRIGHT_KEY = 'selphy-brightness';
+function brightnessVal() {
+  return parseInt(localStorage.getItem(BRIGHT_KEY) || '0', 10) || 0;
+}
+function syncBright() {
+  const v = brightnessVal();
+  $('opt-bright').value = v;
+  $('opt-bright-val').textContent = (v > 0 ? '+' : '') + v + '%';
+}
+
 function populateIccSelect() {
   const sel = $('opt-icc');
   const note = $('icc-note');
@@ -181,6 +192,7 @@ $('printer-status').addEventListener('click', () => {
     EDGES.map((e) => `${e[0].toUpperCase()} ${overscan[e]}`).join(' · ') +
     ` · blue ${blueWidth.left}/${blueWidth.right} mm`;
   populateIccSelect();
+  syncBright();
   $('settings-printer').textContent = $('status-text').textContent;
   // load the calibration preview lazily, only when the sheet opens
   const img = document.querySelector('#cal-preview img');
@@ -613,6 +625,10 @@ $('ed-copies-plus').addEventListener('click', () => {
 $('opt-icc').addEventListener('change', (e) => {
   localStorage.setItem(ICC_KEY, e.target.value);
 });
+$('opt-bright').addEventListener('input', (e) => {
+  localStorage.setItem(BRIGHT_KEY, e.target.value);
+  $('opt-bright-val').textContent = (e.target.value > 0 ? '+' : '') + e.target.value + '%';
+});
 
 // Crop rect (image fractions) for the LIVE editor state — mirrors cropForPrint.
 function currentCropRect() {
@@ -639,6 +655,7 @@ async function showPreview() {
       border: ed.border,
       overscan: effectiveOverscan(),
       iccProfile: iccChoice(),
+      brightness: brightnessVal(),
     }));
     const res = await fetch('api/preview', { method: 'POST', body: form });
     if (!res.ok) throw new Error((await res.text()) || res.statusText);
@@ -708,6 +725,7 @@ async function printAll() {
           // per-device calibration → the server pre-compensates the render
           overscan: effectiveOverscan(),
           iccProfile: iccChoice(),
+      brightness: brightnessVal(),
         })
       );
       const res = await fetch('api/print', { method: 'POST', body: form });
