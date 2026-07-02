@@ -1,9 +1,63 @@
 # selphy-print — CPNP handoff / debugging brief
 
-**Status (2026-07-02):** The CP1500 now **physically prints via CPNP** — paper
-feeds, the engine runs, a page comes out — but **the page is BLANK**. Transport
-is solved; the image data is not landing on the dye. This doc is everything a
-fresh model needs to finish the blank-page problem.
+**CORRECTION 2 (2026-07-02, even later), measured:** the two JPEG paths are
+NOT the same pipeline. A canvas-padded (1248×1872) image sent over IPP JPEG
+printed its padding as visible inset white borders (5.0/4.1 mm ends, 3.3 mm
+sides = exactly our 60/32 px pads + letterbox): **IPP JPEG aspect-FITS onto
+the paper/page area, no canvas overscan; only CPNP fill-scales onto the
+1248×1872 head canvas.** Geometry per path: IPP JPEG → render at page
+1748×1181, calib bleed only (original geometry); CPNP → render at canvas
+with structural bleed {ends:60, sides:32}px + calib. The paragraph below
+overclaims a single rule — read it with this correction.
+
+**CORRECTION (2026-07-02, late night), user-verified on physical prints:**
+the IPP-era verdict "JPEG prints bordered / length hard-clipped to 140.6 mm /
+full-bleed ends impossible" was WRONG — the user confirms the very first IPP
+JPEG print ALSO ran past the perforations, exactly like CPNP, just at a
+different scale factor (different input size → different fill scale). The
+"white bars at the short ends" that condemned the JPEG path were the
+KP-108IN TEAR-OFF STUBS (15 mm each end, physically outside the print
+window, never fully inkable). The "firmware black box" dissolves into one
+deterministic rule: **any JPEG, via IPP or CPNP, is decoded and
+aspect-FILL-scaled onto the 1248×1872 head canvas, centered on the sheet,
+full bleed, always.** ("Identical output for page-size/canvas/supersize
+JPEGs" and "print-scaling ignored" both follow trivially from this rule.)
+URF/PWG raster paths are genuinely different (URF bordered, PWG rejected).
+CPNP stays the default for determinism + progress/error reporting; the IPP
+JPEG fallback now renders at the canvas too (server/index.js).
+
+**Status (2026-07-02, night): SOLVED — CPNP borderless prints work.**
+Blank page = ignored consumed-count acks (fixed). "White borders" = the
+tear-off stubs of the KP-108IN sheet plus wrong render size. Measured
+firmware model (calibration prints + 50 mm bars printing at 52 mm):
+**the CP1500 aspect-FILL-scales any CPNP JPEG onto its 1248×1872 head canvas**
+(= 1872/1800 = 1.04 on that test) and centers it on the physical 100×178 mm
+sheet; ink crosses both perforations → full bleed after tearing. Render
+target is now the canvas itself (scale 1.0): photo composed for the centered
+paper window, mirrored bleed = structural canvasBleed {ends:60, sides:32}px
++ per-edge registration calibration. Like Canon's app we ALWAYS send
+borderless=2; bordered = white frame baked into the image. Remaining:
+verify one calibration sheet (expect first ticks ≈1 mm, bars = 50 mm),
+then ICC/color work.
+
+**Status (2026-07-02, evening):** Blank-page root cause almost certainly found
+by byte-for-byte diff against the decompiled app, and **fixed in code, but NOT
+yet tested on hardware** — the printer's CPNP daemon is wedged (UDP 8609
+completely silent while HTTP/mDNS answer; sessionEnd sweep of ids 1–64 didn't
+revive it). **It needs a power cycle**, then run `node test/cpnp-print.mjs`.
+
+The bug: every CPNP DATA (0x21) ack carries a **consumed-byte count** (u32
+big-endian, ack payload bytes 0–3). Canon's app (`CPNPSock.write`) advances by
+that count and re-sends unconsumed bytes; our client ignored it and barrelled
+on. If the printer consumes less than a full 33792-byte frame, bytes silently
+vanish → JPEG in the spool is corrupt → engine runs, page prints blank, every
+result code reads 0. The app also does GetMaxWriteSize (0x51) after
+SetMaxWriteSize and frames at what the printer *granted* — we assumed 33792.
+Both fixed in `server/cpnp.js` (`writeData`, `negotiateMaxWriteSize`).
+
+**Status (2026-07-02, morning):** The CP1500 **physically prints via CPNP** —
+paper feeds, the engine runs, a page comes out — but **the page is BLANK**.
+Transport is solved; the image data is not landing on the dye.
 
 ---
 
@@ -121,7 +175,43 @@ teardown and the inline cleanup one-liners in the git history.
 
 ---
 
-## 4. THE BLANK-PAGE PROBLEM — hypotheses, ranked
+## 3.5 Corrections from the decompiled-app diff (2026-07-02 evening)
+
+Byte-for-byte audit of `CPNPMakedata`/`CPNPSock`/`CPNPConnected`/
+`CPPrintCommandExecutor` (all field offsets confirmed from the constants at the
+top of `CPNPMakedata.java`):
+
+- **DATA ack = consumed count.** Reply payload bytes 0–3 (u32 BE) of every
+  0x21 ack say how many bytes the printer consumed. `CPNPSock.write` advances
+  the send window by exactly that and re-sends the rest. THE prime blank-page
+  suspect; now honoured in `writeData`.
+- **GetMaxWriteSize (0x51) after SetMaxWriteSize (0x52)** — frame at the
+  granted value (reply payload u32 BE), not the requested one.
+- **Transfer header (104 B, LE), authoritative:** @0 u16 commandType=0 ·
+  @2 u16 code=1 · @4 u32 = 104+partialLen (NOT 104+wholeRequest… the app uses
+  the partial write's length; selphy_go used the whole request — with full
+  consumption they're identical) · @8 u32 printDataType=0 · @12 u32
+  totalImages=1 · **@16 u32 jpegImageNo=0 (NOT 1)** · @20 u32 whole JPEG size ·
+  @24/@28 u32 width/height · **@32 u8 overcoatSetting** (app default 2 =
+  NO_CLIENT_DATA; we send 0 = AUTO, selphy_go parity) · @96/@100 u32 partial
+  offset/size. **Nothing lives at @14** — the old test script's
+  `printSize=4 @0x0e` and `imageNo=1 @0x10` were wrong (both now fixed).
+- **Status `dataRequest` is a u32 LE @0x10**, not just a state byte:
+  0x10000 START_PRINT · 0x20000|pageIndex PRINT_DATA (low byte = requested
+  page; CP mask 0xFFFFFF00) · **0x2FFxx = OC_DATA request** (would look like
+  "state 2" with 0xFF in byte 0x11!) · 0x30000 END_PRINT · 0x40000 CANCEL ·
+  0x70000 EXECUTE_SPOOL_PRINT. Retry counter u32 @0x14: the app re-serves a
+  data request only when (request, retry, extra, extra2) changes.
+- **The app's CP flow is startSpool (code 7, 192 B) → data → executeSpoolPrint
+  (code 8) → endPrint**, not the legacy startPrint/flags path we use. Ours
+  demonstrably drives the engine, so it stays — but if pages still print blank
+  after the ack fix, switching to the spool flow is plan B (the border byte
+  @18=2 in startSpool is where borderless officially lives).
+- **JPEG format hypothesis demoted:** `PrintImageUtil.getImageStream` sends the
+  file bytes verbatim — an Android `Bitmap.compress` baseline JPEG, no EXIF.
+  A bare sharp baseline JPEG matches what Canon itself sends.
+
+## 4. THE BLANK-PAGE PROBLEM — hypotheses, ranked (PRE-DIFF, see §3.5)
 
 The printer prints (engine runs) but nothing appears. The image bytes are not
 being parsed into the print raster. Most likely causes:
@@ -231,8 +321,14 @@ Run one, e.g.: `cd /workspace/selphy-print && node test/cpnp-selphygo.mjs`.
 
 ## 9. TL;DR for the next session
 
-The printer prints blank. Transport & state machine are correct. Focus on the
-**data payload**: (a) try 4096-byte frames, (b) feed a real baseline+EXIF sRGB
-JPEG, (c) diff `makeTransfer` in `server/cpnp.js` against
-`CPNPMakedata.setTransferPrintDataHeaderCP` in the decompiled app. Iterate in
-`test/cpnp-selphygo.mjs`. Clear stuck sessions between runs.
+Root cause identified (§3.5: ignored consumed-count acks + unverified max
+write size) and fixed in `server/cpnp.js`, **untested** — the printer's CPNP
+daemon is wedged and needs a POWER CYCLE first. Then:
+
+1. `node test/cpnp-print.mjs` — drives the real `cpnpPrint()` with a 6-bar
+   colour test page (unmistakable vs blank). Watch for `partial ack:` log
+   lines — their presence confirms the diagnosis.
+2. If STILL blank: plan B = switch to the app's spool flow (startSpool 192 B
+   code 7 → data → executeSpoolPrint code 8 → endPrint), and/or set
+   overcoatSetting @32 = 2. `makeStartSpool` already exists in server/cpnp.js.
+3. Then wire-test `/api/print` end-to-end (`PRINT_FORMAT=cpnp`).

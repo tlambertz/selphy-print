@@ -28,6 +28,7 @@ const CODE = {
   printDataTransfer: 1,
   cancelPrint: 2,
   endPrint: 3,
+  resumePrint: 6,
   startSpool: 7,
   executeSpoolPrint: 8,
 };
@@ -109,14 +110,51 @@ async function readStatus(conn, sessionId) {
   await conn.write(pkt);
   const { body } = await readFrame(conn);
   const u32 = (o) => (o + 4 <= body.length ? body.readUInt32LE(o) : 0);
+  const dataRequest = u32(0x10);
   return {
     state: body.length > 0x12 ? body[0x12] : -1,
-    statusCode: body.length > 8 ? body[8] : 0, // 0x0c = no cassette
+    // u16 LE @8 (CPNP.DeviceStatus): 0 idle, 0xFF01..0xFF10 print cycle
+    // (yellow/magenta/cyan/overcoat passes), 0xFF0C error-pausing.
+    deviceStatus: body.length >= 10 ? body.readUInt16LE(8) : 0,
+    error: u32(0x0c), // u32 LE @12 (CPNP.Error), 0 = none
+    dataRequest,
+    // CP devices put the requested page index in the low byte of a PRINT_DATA
+    // request, and signal an overcoat-data request as 0x2FFxx (CPNPConnected).
+    isOcRequest: (dataRequest | 0xff) === 0x2ffff,
+    retry: u32(0x14),
     offset: u32(0x18),
     length: u32(0x1c),
     raw: body,
   };
 }
+
+// CPNP.Error values (decompiled app) worth a human message.
+const CPNP_ERRORS = {
+  0x0000010a: 'waiting for paper pick', // transient, not fatal
+  0x00010101: 'paper end (cassette empty)',
+  0x00010102: 'no paper cassette',
+  0x00010103: 'wrong cassette size',
+  0x00010109: 'paper cover open',
+  0x0001010c: 'different paper size',
+  0x00010201: 'ink end',
+  0x00010202: 'no ink cassette',
+  0x00010302: 'no tray and no ink cassette',
+  0x0003ff05: 'JPEG decode failed on printer',
+  0x00ff0104: 'paper jam',
+};
+const errName = (e) => CPNP_ERRORS[e] || `0x${e.toString(16)}`;
+
+// Conditions that pause the job on the printer until the user fixes them
+// (insert cassette / paper) — wait, don't abort.
+const WAITABLE_ERRORS = new Set([0x0000010a, 0x00010101, 0x00010102]);
+
+// Human-readable print pass for a 0xFFxx deviceStatus (progress logging).
+const PASS_NAMES = {
+  0xff01: 'initializing', 0xff02: 'yellow (heating)', 0xff03: 'yellow',
+  0xff04: 'magenta (heating)', 0xff05: 'magenta', 0xff06: 'cyan (heating)',
+  0xff07: 'cyan', 0xff08: 'overcoat (heating)', 0xff09: 'overcoat',
+  0xff0a: 'finalizing', 0xff0b: 'battery heat wait', 0xff10: 'paper pick',
+};
 
 // Returns { sessionId, tcpPort } — the printer allocates a per-session data
 // port (reply bytes 20-21) and a session id (bytes 10-11).
@@ -213,6 +251,9 @@ function setSession(buf, sessionId) {
   buf[11] = sessionId & 0xff;
 }
 
+// SetMaxWriteSize(33792) then GetMaxWriteSize — the printer may grant less
+// than requested, and Canon's app frames all data writes at the value the
+// printer reports back (CPNPSock.open → setMaxDataWriteSize + getMaxDataWriteSize).
 async function negotiateMaxWriteSize(conn, sessionId) {
   const set = Buffer.from([67, 80, 78, 80, 1, 0x52, 0, 0, 0, 0, 0, 0, 0, 0, 0, 4, 0, 0, 0x84, 0]);
   setPacketId(set, nextPacketId());
@@ -220,15 +261,32 @@ async function negotiateMaxWriteSize(conn, sessionId) {
   await conn.write(set);
   const reply = await readFrame(conn);
   if (reply.result !== 0) throw new Error(`SetMaxWriteSize failed: ${reply.result}`);
+
+  const get = Buffer.from([67, 80, 78, 80, 1, 0x51, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+  setPacketId(get, nextPacketId());
+  setSession(get, sessionId);
+  await conn.write(get);
+  const getReply = await readFrame(conn);
+  if (getReply.result === 0 && getReply.body.length >= 4) {
+    const granted = getReply.body.readUInt32BE(0);
+    if (granted >= 1024 && granted <= 1 << 20) return granted;
+  }
+  return MAX_CHUNK;
 }
 
-// Wrap a command payload in CPNP write frames (opcode 0x21) over TCP,
-// splitting into <= MAX_CHUNK pieces. Every frame carries sessionId@10-11
-// and its piece length (big-endian) @12-15. Returns the last frame's result.
-async function writeData(conn, sessionId, payload) {
-  let lastResult = 0;
-  for (let off = 0; off < payload.length; off += MAX_CHUNK) {
-    const piece = payload.subarray(off, Math.min(off + MAX_CHUNK, payload.length));
+// Wrap a command payload in CPNP write frames (opcode 0x21) over TCP.
+// Each frame's ack payload carries a CONSUMED byte count (u32 big-endian at
+// bytes 0-3); the printer may accept less than a full frame, and the app
+// (CPNPSock.write) advances only by that count, re-sending the remainder.
+// Ignoring it silently drops bytes — the printer still acks result 0, the
+// state machine completes, and the page prints blank.
+async function writeData(conn, sessionId, payload, maxw = MAX_CHUNK, log = () => {}) {
+  let sent = 0;
+  let stalls = 0;
+  const deadline = Date.now() + 120000;
+  while (sent < payload.length) {
+    if (Date.now() > deadline) throw new Error('CPNP write timed out');
+    const piece = payload.subarray(sent, sent + Math.min(maxw, payload.length - sent));
     const head = Buffer.from([67, 80, 78, 80, 1, 0x21, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
     setPacketId(head, nextPacketId());
     setSession(head, sessionId);
@@ -238,15 +296,28 @@ async function writeData(conn, sessionId, payload) {
     head[15] = piece.length & 0xff;
     await conn.write(Buffer.concat([head, piece]));
     const reply = await readFrame(conn);
-    lastResult = reply.result;
     if (reply.result !== 0) throw new Error(`write frame rejected: result ${reply.result}`);
+    const consumed = reply.body.length >= 4 ? reply.body.readUInt32BE(0) : piece.length;
+    if (consumed > 0) {
+      if (consumed < piece.length) log(`partial ack: sent ${piece.length}, consumed ${consumed}`);
+      sent += Math.min(consumed, piece.length);
+      stalls = 0;
+    } else if (++stalls > 50) {
+      throw new Error('printer stopped consuming data (50 zero-byte acks)');
+    } else {
+      await sleep(50);
+    }
   }
-  return lastResult;
+  return 0;
 }
 
 /* ---------- payload builders (little-endian inner fields) ---------- */
 
-function makeStartSpool(jpegSize, { typePrint = 0, typeJpeg = 0 } = {}) {
+// The CP flow's job header (CPNPMakedata.makeStartSpool) — this is where
+// borderless officially lives for the CP1500 (byte 18: 2 borderless,
+// 3 bordered). Enum values from the decompiled app: imageOptimize OFF=2/ON=3,
+// printFinish AUTO=0/GLOSSY=2.
+function makeStartSpool(jpegSize, { border = false, typePrint = 0, typeJpeg = 0 } = {}) {
   const b = Buffer.alloc(192);
   le(b, 0, 2, typePrint); // commandType
   le(b, 2, 2, CODE.startSpool); // code = 7
@@ -255,9 +326,9 @@ function makeStartSpool(jpegSize, { typePrint = 0, typeJpeg = 0 } = {}) {
   le(b, 12, 2, 1); // totalJpegImages
   le(b, 14, 2, CP_POST_SIZE); // printSize = 4
   le(b, 16, 1, 1); // overcoatSetting (each page)
-  le(b, 17, 1, 0); // imageOptimize
-  le(b, 18, 1, BORDER_BORDERLESS); // borderSetting = 2  ← borderless
-  le(b, 19, 1, 0); // printFinish
+  le(b, 17, 1, 2); // imageOptimize OFF — deterministic for ICC profiling
+  le(b, 18, 1, border ? 3 : BORDER_BORDERLESS); // borderSetting
+  le(b, 19, 1, 0); // printFinish AUTO
   le(b, 32, 4, jpegSize); // JPEG file size for image 0
   return b;
 }
@@ -281,11 +352,13 @@ function makeTransferHeader(chunk, offset, total, w, h, jpegSize, opts = {}) {
   return b;
 }
 
+// Control packets (endPrint, executeSpoolPrint, cancel…) are 64 bytes
+// (CPNPMakedata `size`), not the 104-byte transfer-header size.
 function makeSimple(code, { typePrint = 0 } = {}) {
-  const b = Buffer.alloc(104);
+  const b = Buffer.alloc(64);
   le(b, 0, 2, typePrint);
   le(b, 2, 2, code);
-  le(b, 4, 4, 104);
+  le(b, 4, 4, 64);
   return b;
 }
 
@@ -310,31 +383,79 @@ export async function cpnpPrint(host, jpeg, opts = {}) {
   if (!conn) throw new Error('CPNP: printer did not open its data port');
 
   try {
-    await negotiateMaxWriteSize(conn, sessionId);
-    const deadline = Date.now() + 180000;
+    const maxw = await negotiateMaxWriteSize(conn, sessionId);
+    log(`max write size: ${maxw}`);
+    let deadline = Date.now() + 300000;
+    let waitStart = 0;
     let transferred = false;
     let lastKey = '';
-    let sameCount = 0;
+    let lastPass = 0;
+    let idleSince = 0;
+    let servedKey = '';
 
+    // Drive the app's CP spool flow: START_PRINT req → startSpool ·
+    // PRINT_DATA req → transfer · EXECUTE_SPOOL_PRINT req (state 7) →
+    // executeSpoolPrint · END_PRINT req (state 3) → endPrint. Tearing the
+    // session down before END_PRINT silently cancels the buffered job.
     while (Date.now() < deadline) {
       let st;
       try { st = await readStatus(conn, sessionId); } catch { await sleep(150); continue; }
 
-      // Cassette / error at byte 8 (0x0c = no paper cassette).
-      if (st.statusCode === 0x0c) throw new Error('no paper cassette in printer');
-      if (st.statusCode && st.statusCode !== 0x01 && st.statusCode !== 0x0f) {
-        throw new Error('printer error 0x' + st.statusCode.toString(16));
+      // Errors live in a dedicated u32 @12; deviceStatus 0xFFxx values are
+      // the normal print cycle (0xFF03 = printing yellow, NOT error 3).
+      // Paper-out/no-cassette pause the job on the printer rather than
+      // killing it — wait for the user instead of aborting.
+      if (st.error && !WAITABLE_ERRORS.has(st.error)) {
+        throw new Error(`printer error: ${errName(st.error)}`);
+      }
+      if (st.error && st.error !== 0x10a) {
+        onState('waiting: ' + errName(st.error));
+        if (!waitStart) waitStart = Date.now();
+        if (Date.now() - waitStart > 600000) throw new Error(`gave up waiting: ${errName(st.error)}`);
+        deadline = Math.max(deadline, Date.now() + 120000);
+      } else if (!st.error) {
+        waitStart = 0;
+      }
+      if (st.deviceStatus === 0xffff) throw new Error('printer critical error');
+      if (st.deviceStatus === 0xff0d && lastPass !== 0xff0d) {
+        // RESUME_WAITING: paper/ink restored, printer asks permission to go on
+        await writeData(conn, sessionId, makeSimple(CODE.resumePrint), maxw, log);
+        log('resumePrint sent');
+      }
+      if ((st.deviceStatus & 0xff00) === 0xff00 && st.deviceStatus !== lastPass) {
+        lastPass = st.deviceStatus;
+        const pass = PASS_NAMES[st.deviceStatus];
+        if (pass) { onState('printing'); log(`printing: ${pass}`); }
       }
 
-      const key = `${st.state}:${st.offset}:${st.length}`;
-      sameCount = key === lastKey ? sameCount + 1 : 0;
-      lastKey = key;
+      const key = `${st.state}:${st.dataRequest}:${st.retry}:${st.offset}:${st.length}:${st.deviceStatus}`;
+      if (key !== lastKey) {
+        log(`status: state=${st.state} req=0x${st.dataRequest.toString(16)} retry=${st.retry} off=${st.offset} len=${st.length} dev=0x${st.deviceStatus.toString(16)}`);
+        lastKey = key;
+      }
 
       if (st.state === 0x01) {
-        onState('flags');
-        await writeData(conn, sessionId, makeFlags(border));
+        onState('start');
+        await writeData(conn, sessionId, makeStartSpool(jpeg.length, { border }), maxw, log);
+      } else if (st.state === 0x07) {
+        // printer has the whole spool; this commits it to paper
+        onState('spool');
+        await writeData(conn, sessionId, makeSimple(CODE.executeSpoolPrint), maxw, log);
+        log('executeSpoolPrint sent');
       } else if (st.state === 0x02) {
         onState('data');
+        if (st.isOcRequest) {
+          // Overcoat data request — we send none (overcoatSetting 0 = auto);
+          // surface it rather than corrupting the spool with print data.
+          log(`printer requested OC data off=${st.offset} len=${st.length} — not implemented`);
+          await sleep(300);
+          continue;
+        }
+        // The app only re-serves a request when its (request, retry, off, len)
+        // tuple changes; the retry counter increments when the printer really
+        // wants a resend (CPPrintCommandExecutor.isRequestDataChanged).
+        const reqKey = `${st.dataRequest}:${st.retry}:${st.offset}:${st.length}`;
+        if (reqKey === servedKey) { await sleep(100); continue; }
         // Serve get_chunk(offset,length) like selphy_go: ONE 104-byte header
         // declaring the whole requested length, followed by that many bytes
         // (zero-padded past EOF), streamed across frames by writeData.
@@ -342,25 +463,30 @@ export async function cpnpPrint(host, jpeg, opts = {}) {
         let length = st.length;
         // sanitise a garbage/huge length request
         if (!(length > 0) || length > jpeg.length) length = Math.max(0, jpeg.length - off);
-        await writeData(conn, sessionId, makeTransfer(jpeg, off, length, width, height));
+        await writeData(conn, sessionId, makeTransfer(jpeg, off, length, width, height), maxw, log);
+        servedKey = reqKey;
         if (off + length >= jpeg.length || off >= jpeg.length) transferred = true;
-        if (off >= jpeg.length && sameCount > 3) break; // done reading
         log(`sent off=${off} len=${length}`);
       } else if (st.state === 0x03) {
-        const done = Buffer.alloc(0x40);
-        done.writeUInt32LE(0x40, 0x04);
-        done[2] = 0x03;
-        await writeData(conn, sessionId, done).catch(() => {});
+        await writeData(conn, sessionId, makeSimple(CODE.endPrint), maxw, log).catch(() => {});
+        log('endPrint sent');
         break;
       } else if (st.state === 0x04) {
-        throw new Error('printer reported error state');
+        throw new Error(`printer reported error state (${errName(st.error)})`);
       } else {
-        // idle/processing: once the whole image is in, the printer prints.
-        if (transferred && sameCount > 4) break;
+        // Idle/processing. Even with the image fully in, wait for the
+        // EXECUTE_SPOOL_PRINT / END_PRINT requests rather than bailing —
+        // only give up after the printer has sat truly idle for a while.
+        if (transferred && st.deviceStatus === 0) {
+          if (!idleSince) idleSince = Date.now();
+          if (Date.now() - idleSince > 60000) { log('no END_PRINT request after 60s idle'); break; }
+        } else {
+          idleSince = 0;
+        }
         await sleep(300);
       }
+      if (st.state !== 0x00) idleSince = 0;
     }
-    onState('printing');
   } finally {
     conn.close();
     await sessionEnd(host, sessionId);
@@ -369,8 +495,11 @@ export async function cpnpPrint(host, jpeg, opts = {}) {
   return { printed: true };
 }
 
-// Job-flags packet (64B): length@4, marker@0x0c=1, border@0x12 (2=borderless,
-// 3=bordered). Sent in state 1.
+// LEGACY fallback (selphy_go-era startPrint): 64B, length@4, marker@0x0c=1,
+// border@0x12. Drives the CP1500 too, but the printer ignores the border
+// byte here (prints bordered) — the spool flow's makeStartSpool is what
+// carries borderless on this firmware. Kept for reference/fallback.
+// eslint-disable-next-line no-unused-vars
 function makeFlags(border) {
   const b = Buffer.alloc(0x40);
   b.writeUInt32LE(0x40, 0x04);

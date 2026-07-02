@@ -1,9 +1,10 @@
 /* Faithful port of tbleher/selphy_go's working flow, adapted to the CP1500's
-   dynamic-port session. NO startSpool / setMaxWriteSize / 104-byte headers —
-   just: poll status, and act on status byte 0x12 (state):
-     0 wait · 1 send 64B flags(border@0x12) · 2 send raw JPEG[off:off+len] in
-     4KB chunks · 3 send done · 4 error.
-   Paper removed, so running to completion is safe. Usage: node test/cpnp-selphygo.mjs <ip> */
+   dynamic-port session and corrected against the decompiled SELPHY Photo
+   Layout app (CPNPMakedata / CPNPSock). Poll status, act on byte 0x12 (state):
+     0 wait · 1 send 64B flags(border@0x12) · 2 send ONE 104B header + data,
+     streamed in <= maxwrite frames advancing by the consumed-count acks ·
+     3 send done · 4 error.
+   WITH PAPER LOADED THIS PRINTS. Usage: node test/cpnp-selphygo.mjs <ip> [border] */
 import dgram from 'node:dgram';
 import net from 'node:net';
 import sharp from 'sharp';
@@ -80,7 +81,13 @@ console.log('JPEG', jpeg.length, 'bytes');
   await write(set); const r = await readFrame();
   console.log('SetMaxWriteSize result', r.result);
 }
-const MAXW = 33792;
+// read back what the printer actually granted (the app does this)
+let MAXW = 33792;
+{
+  const r = await cmd(0x51);
+  if (r.result === 0 && r.body.length >= 4) MAXW = r.body.readUInt32BE(0);
+  console.log('GetMaxWriteSize →', MAXW, 'body:', H(r.body));
+}
 
 let last = null;
 for (let i = 0; i < 200; i++) {
@@ -97,23 +104,28 @@ for (let i = 0; i < 200; i++) {
     const b = Buffer.alloc(0x40); le(b, 0x04, 0x40); le(b, 0x0c, 1); le(b, 0x12, border ? 3 : 2);
     const r = await cmd(0x21, b); console.log('  → flags result', r.result, 'ack', H(r.body));
   } else if (state === 0x02) {
-    // neo: satisfy the requested [off,len] range with 104-header transfers,
-    // each carrying <= (MAXW-104) bytes of JPEG at its partial offset.
-    const total = Math.min(length, jpeg.length - off);
+    // ONE 104-byte header for the whole request (app: makePrintDataTransfer,
+    // selphy_go: file_header+get_chunk), then the data, streamed in <= MAXW
+    // frames. Each DATA ack's payload bytes 0-3 (u32 BE) say how many bytes
+    // the printer consumed — advance by that, re-sending the remainder
+    // (app: CPNPSock.write). jpegImageNo @0x10 stays 0; nothing lives @0x0e.
+    const total = Math.min(length, Math.max(0, jpeg.length - off));
+    const h = Buffer.alloc(104);
+    le(h, 0x02, 1); le(h, 0x04, 104 + total); le(h, 0x0c, 1);
+    le(h, 0x14, jpeg.length); le(h, 0x18, 1184); le(h, 0x1c, 1752);
+    le(h, 0x60, off); le(h, 0x64, total);
+    const payload = Buffer.concat([h, jpeg.subarray(off, off + total)]);
     let done = 0, ok = true;
-    while (done < total) {
-      const poff = off + done;
-      const n = Math.min(MAXW - 104, total - done);
-      const part = jpeg.subarray(poff, poff + n);
-      const h = Buffer.alloc(104);
-      le(h, 0x02, 1); le(h, 0x04, 104 + part.length); le(h, 0x0c, 1); le(h, 0x0e, 4);
-      le(h, 0x10, 1); le(h, 0x14, jpeg.length); le(h, 0x18, 1184); le(h, 0x1c, 1752);
-      le(h, 0x60, poff); le(h, 0x64, part.length);
-      const r = await cmd(0x21, Buffer.concat([h, part]));
-      if (r.result !== 0) { console.log(`  chunk off=${poff} n=${n} REJECT result=0x${r.result.toString(16)}`); ok = false; break; }
-      done += n;
+    while (done < payload.length) {
+      const piece = payload.subarray(done, done + Math.min(MAXW, payload.length - done));
+      const r = await cmd(0x21, piece);
+      if (r.result !== 0) { console.log(`  frame @${done} REJECT result=0x${r.result.toString(16)}`); ok = false; break; }
+      const consumed = r.body.length >= 4 ? r.body.readUInt32BE(0) : piece.length;
+      if (consumed < piece.length) console.log(`  partial ack: sent ${piece.length} consumed ${consumed}`);
+      if (consumed > 0) done += Math.min(consumed, piece.length);
+      else await sleep(50);
     }
-    console.log(`  → satisfied off=${off} len=${total} sent=${done} ${ok ? 'OK' : 'FAIL'}`);
+    console.log(`  → satisfied off=${off} len=${total} streamed=${done}/${payload.length} ${ok ? 'OK' : 'FAIL'}`);
   } else if (state === 0x03) {
     const b = Buffer.alloc(0x40); le(b, 0x04, 0x40); b[2] = 0x03;
     const r = await cmd(0x21, b); console.log('  → DONE result', r.result); break;
