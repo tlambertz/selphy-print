@@ -17,20 +17,26 @@ Android share sheet ──► PWA (crop UI, queue) ──► Node server ──�
   enlargement cannot be bypassed over IPP (custom media caps at 102×153 mm),
   so the outer few mm of any borderless print never land on paper.
 
-  Measured on a real CP1500 (not documented anywhere else, as far as we can
-  tell): the firmware's borderless enlargement is **tied to the
-  print-scaling mode**. With `print-scaling=none` the raster is placed 1:1
-  centered on the head canvas — the sides get shaved ~2.8 mm because the
-  canvas is wider than the paper, but the ends *stop at the tear-off
-  perforations* (± feed offset), leaving white bars: true borderless is
-  physically impossible in that mode. With `print-scaling=fill` (this app's
-  default) the firmware enlarges the page ~7% onto the canvas — full bleed
-  everywhere, at the cost of per-edge trim.
+  Measured on a real CP1500 (fw 1.0.6.0), the hard way:
 
-  This app removes every *other* source of cropping (images rendered at
-  exactly the page raster, so `fill`'s aspect math is a clean uniform
-  enlargement with no additional crop) and then **pre-compensates the
-  enlargement itself**: your crop is rendered into the calibrated surviving window of the
+  - **JPEG jobs are a firmware black box.** `print-scaling` is advertised
+    but absent from `job-creation-attributes-supported` and provably
+    ignored; page-size, canvas-size (1248×1872) and oversize (3600×2400)
+    JPEGs all printed with identical placement — 1:1-ish with **white bars
+    at the short ends** — regardless of borderless `media-col`. Don't print
+    JPEG directly to this printer.
+  - **PWG raster is the path that behaves** (`document-format-preferred` is
+    its sibling URF; this is what AirPrint and CUPS driverless send). And
+    the community recipe holds: with the **plain media keyword** (not the
+    borderless variant) the firmware prints a full-page raster **1:1 with
+    no borderless enlargement** — deterministic geometry, only mechanical
+    registration (~1 mm) left over. The zero-margin borderless `media-col`
+    instead engages the firmware's ~7% enlargement ("borderless prints are
+    always cropped" complaints); this app defaults to plain + full-page
+    raster (`PRINT_FORMAT=pwg`, `MEDIA_VARIANT=plain`).
+
+  This app renders your crop as a full-page 300 dpi raster and
+  **pre-compensates the measured residual trim**: your crop is rendered into the calibrated surviving window of the
   page and the doomed outer zone is filled with mirrored bleed. Net result:
   the frame you set in the crop UI is what lands on paper, edge to edge,
   within the printer's ~±1 mm mechanical feed tolerance (shown as a thin

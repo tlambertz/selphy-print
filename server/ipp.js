@@ -288,32 +288,37 @@ export async function getPrinterAttributes(printerUrl, timeoutMs = 5000) {
 }
 
 /**
- * Send a JPEG as a single Print-Job.
- * opts: { jobName, copies, borderless, printScaling, mediaSize: {x, y} (1/100 mm) }
+ * Send a single document as a Print-Job.
+ * opts: { jobName, copies, format ('image/pwg-raster' | 'image/jpeg'),
+ *         media (keyword, e.g. 'jpn_hagaki_100x148mm'),
+ *         borderless (adds zero-margin media-col), printScaling,
+ *         mediaSize: {x, y} (1/100 mm) }
  */
-export async function printJob(printerUrl, jpeg, opts = {}) {
+export async function printJob(printerUrl, data, opts = {}) {
   const jobAttrs = {};
   if (opts.copies > 1) jobAttrs.copies = { type: 'integer', value: opts.copies };
   if (opts.printScaling) jobAttrs['print-scaling'] = { type: 'keyword', value: opts.printScaling };
 
-  const mediaCol = {};
-  if (opts.mediaSize) {
-    mediaCol['media-size'] = {
-      type: 'collection',
-      value: {
-        'x-dimension': { type: 'integer', value: opts.mediaSize.x },
-        'y-dimension': { type: 'integer', value: opts.mediaSize.y },
-      },
-    };
-  }
-  const margin = opts.borderless ? 0 : null;
-  if (margin !== null) {
-    for (const side of ['top', 'bottom', 'left', 'right']) {
-      mediaCol[`media-${side}-margin`] = { type: 'integer', value: margin };
+  if (opts.borderless) {
+    // Borderless media variant: zero-margin media-col (cups-filters#492).
+    const mediaCol = {};
+    if (opts.mediaSize) {
+      mediaCol['media-size'] = {
+        type: 'collection',
+        value: {
+          'x-dimension': { type: 'integer', value: opts.mediaSize.x },
+          'y-dimension': { type: 'integer', value: opts.mediaSize.y },
+        },
+      };
     }
-  }
-  if (Object.keys(mediaCol).length) {
+    for (const side of ['top', 'bottom', 'left', 'right']) {
+      mediaCol[`media-${side}-margin`] = { type: 'integer', value: 0 };
+    }
     jobAttrs['media-col'] = { type: 'collection', value: mediaCol };
+  } else if (opts.media) {
+    // Plain media keyword: the firmware prints rasters 1:1, no borderless
+    // enlargement — the "select the non-borderless variant" recipe.
+    jobAttrs.media = { type: 'keyword', value: opts.media };
   }
 
   const groups = [
@@ -322,14 +327,14 @@ export async function printJob(printerUrl, jpeg, opts = {}) {
       attrs: opAttrs(printerUrl, {
         'requesting-user-name': { type: 'nameWithoutLanguage', value: 'selphy-print' },
         'job-name': { type: 'nameWithoutLanguage', value: opts.jobName || 'photo' },
-        'document-format': { type: 'mimeMediaType', value: 'image/jpeg' },
+        'document-format': { type: 'mimeMediaType', value: opts.format || 'image/jpeg' },
       }),
     },
   ];
   if (Object.keys(jobAttrs).length) groups.push({ tag: TAG.job, attrs: jobAttrs });
 
-  const body = encodeRequest('Print-Job', nextRequestId++, groups, jpeg);
-  const res = await post(printerUrl, body, opts.timeoutMs || 30000);
+  const body = encodeRequest('Print-Job', nextRequestId++, groups, data);
+  const res = await post(printerUrl, body, opts.timeoutMs || 60000);
   if (res.statusCode > 0x0005) {
     const un = res.groups.find((g) => g.tag === TAG.unsupported);
     throw new Error(

@@ -13,8 +13,9 @@ let paper = {
   page: { w: 1748, h: 1181 }, // landscape px @300dpi
 };
 // Per-edge trim in page-mm, in editor orientation (matches the T/B/L/R
-// letters printed on the calibration page). Server default; calibratable.
-let overscan = { top: 3.5, bottom: 3.5, left: 5.5, right: 5.5 };
+// letters printed on the calibration page). On the raster path prints are
+// 1:1, so this is only mechanical registration (~1 mm). Calibratable.
+let overscan = { top: 1.0, bottom: 1.0, left: 1.0, right: 1.0 };
 
 const OVERSCAN_KEY = 'selphy-overscan-v2';
 const EDGES = ['top', 'bottom', 'left', 'right'];

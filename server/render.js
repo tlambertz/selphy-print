@@ -63,20 +63,35 @@ export async function renderForPrint(input, opts) {
   region.width = Math.min(region.width, meta.width - region.left);
   region.height = Math.min(region.height, meta.height - region.top);
 
-  // Mirrored bleed: trimmed by the enlargement; under ±1 mm registration
-  // drift a sliver of mirrored image shows instead of a white edge.
+  // Mirrored bleed: trimmed by the borderless overscan; under ±1 mm
+  // registration drift a sliver of mirrored image shows instead of white.
+  // White-border mode passes extendWith: 'background' instead.
   // (Separate pass for the final rotate — sharp orders rotate before extend
   // within a single pipeline, which would put the bleed on the wrong edges.)
   const page = await sharp(buf)
     .extract(region)
     .resize(inner.w, inner.h, { fit: 'fill', kernel: 'lanczos3' })
-    .extend({ ...bleed, extendWith: 'mirror' })
+    .extend({
+      ...bleed,
+      extendWith: opts.padWhite ? 'background' : 'mirror',
+      background: '#ffffff',
+    })
     .toBuffer();
-  const rendered = await sharp(page)
-    .rotate(90) // printer feeds portrait, short edge first
+  let portrait = sharp(page).rotate(90); // printer feeds portrait, short edge first
+
+  if (opts.output === 'raw') {
+    let tiff = await portrait.removeAlpha().tiff({ compression: 'none' }).toBuffer();
+    if (icc.profile) tiff = await applyIccTiff(tiff, icc);
+    const { data, info } = await sharp(tiff)
+      .removeAlpha()
+      .raw()
+      .toBuffer({ resolveWithObject: true });
+    return { rgb: data, width: info.width, height: info.height };
+  }
+
+  const rendered = await portrait
     .jpeg({ quality: 97, chromaSubsampling: '4:4:4' })
     .toBuffer();
-
   if (!icc.profile) return rendered;
   return applyIcc(rendered, icc);
 }
@@ -97,6 +112,28 @@ function centerCover(w, h, aspect) {
 }
 
 const INTENTS = { perceptual: '0', relative: '1', saturation: '2', absolute: '3' };
+
+// Lossless ICC conversion for the raster path (littleCMS tificc).
+async function applyIccTiff(tiff, icc) {
+  const dir = await mkdtemp(path.join(tmpdir(), 'selphy-'));
+  const inFile = path.join(dir, 'in.tif');
+  const outFile = path.join(dir, 'out.tif');
+  try {
+    await writeFile(inFile, tiff);
+    await execFileP('tificc', [
+      '-t', INTENTS[icc.intent] ?? '0',
+      '-b',
+      '-o', icc.profile,
+      inFile,
+      outFile,
+    ]);
+    return await readFile(outFile);
+  } catch (err) {
+    throw new Error(`ICC conversion failed: ${err.stderr || err.message}`);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+}
 
 async function applyIcc(jpeg, icc) {
   const dir = await mkdtemp(path.join(tmpdir(), 'selphy-'));
@@ -128,7 +165,7 @@ async function applyIcc(jpeg, icc) {
     edges, so the first tick visible on paper = per-edge trim directly. The
     50 mm reference bars expose any hidden scaling: if they don't measure
     50 mm on paper, the printer scaled the raster and the model is wrong. */
-export async function renderCalibration(page, dpi = 300) {
+export async function renderCalibration(page, dpi = 300, output = 'jpeg') {
   const { w, h } = page; // landscape
   const pxPerMm = dpi / 25.4;
   const ticks = [];
@@ -178,8 +215,13 @@ export async function renderCalibration(page, dpi = 300) {
 
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}"><rect width="100%" height="100%" fill="#fff"/>${border}${ticks.join('')}${letters}${text}</svg>`;
 
-  return sharp(Buffer.from(svg))
-    .rotate(90)
-    .jpeg({ quality: 97 })
-    .toBuffer();
+  const portrait = sharp(Buffer.from(svg)).rotate(90);
+  if (output === 'raw') {
+    const { data, info } = await portrait
+      .removeAlpha()
+      .raw()
+      .toBuffer({ resolveWithObject: true });
+    return { rgb: data, width: info.width, height: info.height };
+  }
+  return portrait.jpeg({ quality: 97 }).toBuffer();
 }

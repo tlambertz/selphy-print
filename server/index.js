@@ -6,6 +6,7 @@ import fastifyMultipart from '@fastify/multipart';
 import { config, printerUrl } from './config.js';
 import { getPrinterAttributes, getJobAttributes, printJob } from './ipp.js';
 import { renderForPrint, renderCalibration } from './render.js';
+import { encodePwg } from './pwg.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = Fastify({ logger: { level: process.env.LOG_LEVEL || 'info' } });
@@ -44,16 +45,18 @@ function enqueue(work) {
   return job;
 }
 
-async function printBuffer(job, jpeg, { copies = 1, borderless = true, jobName = 'photo' }) {
+async function printBuffer(job, data, { copies = 1, format = 'image/jpeg', jobName = 'photo' }) {
   const url = printerUrl();
   if (!url) throw new Error('printer not configured — set PRINTER_HOST');
 
   job.state = 'printing';
   job.stateText = 'sending to printer…';
-  const { jobId: ippJobId } = await printJob(url, jpeg, {
+  const { jobId: ippJobId } = await printJob(url, data, {
     jobName,
     copies,
-    borderless,
+    format,
+    borderless: config.mediaVariant === 'borderless',
+    media: config.paper.mediaName,
     printScaling: config.printScaling,
     mediaSize: config.paper.media,
   });
@@ -149,17 +152,27 @@ app.post('/api/print', async (req, reply) => {
   const job = enqueue(async (job) => {
     job.state = 'rendering';
     job.stateText = 'processing image…';
-    // Borderless: exact IPP page raster (imaged 1:1, print-scaling=none),
-    // crop rendered into the calibrated surviving window + mirrored bleed.
-    // Bordered: exact printable-area raster, nothing trimmed, no bleed.
-    const jpeg = await renderForPrint(imageBuf, {
+    // Always a full-page raster, printed 1:1 (PWG + plain media).
+    // Borderless: crop fills the calibrated surviving window, mirrored
+    // bleed covers the registration zone. White border: the image sits in
+    // the printable-area window and the "bleed" is white padding.
+    const rendered = await renderForPrint(imageBuf, {
       crop: options.crop || null,
       rotate: [0, 90, 180, 270].includes(options.rotate) ? options.rotate : 0,
-      target: borderless ? config.paper.page : config.paper.printable,
-      bleed: borderless ? bleed : null,
+      target: config.paper.page,
+      bleed: borderless
+        ? bleed
+        : { top: 30, bottom: 30, left: 44, right: 44 }, // 2.5 / 3.7 mm white frame
+      padWhite: !borderless,
       icc: config.icc,
+      output: config.printFormat === 'pwg' ? 'raw' : 'jpeg',
     });
-    await printBuffer(job, jpeg, { copies, borderless });
+    if (config.printFormat === 'pwg') {
+      const pwg = encodePwg(rendered.rgb, rendered.width, rendered.height);
+      await printBuffer(job, pwg, { copies, format: 'image/pwg-raster' });
+    } else {
+      await printBuffer(job, rendered, { copies, format: 'image/jpeg' });
+    }
   });
 
   return { jobId: job.id };
@@ -177,9 +190,15 @@ app.post('/api/calibrate', async () => {
   const job = enqueue(async (job) => {
     job.state = 'rendering';
     job.stateText = 'rendering calibration page…';
-    // Diagnostic raster at the full head canvas — see renderCalibration.
-    const jpeg = await renderCalibration(config.paper.canvas);
-    await printBuffer(job, jpeg, { copies: 1, borderless: true, jobName: 'calibration' });
+    // Full-page ruler through the same 1:1 raster path as photos.
+    if (config.printFormat === 'pwg') {
+      const r = await renderCalibration(config.paper.page, 300, 'raw');
+      const pwg = encodePwg(r.rgb, r.width, r.height);
+      await printBuffer(job, pwg, { copies: 1, format: 'image/pwg-raster', jobName: 'calibration' });
+    } else {
+      const jpeg = await renderCalibration(config.paper.page);
+      await printBuffer(job, jpeg, { copies: 1, format: 'image/jpeg', jobName: 'calibration' });
+    }
   });
   return { jobId: job.id };
 });
