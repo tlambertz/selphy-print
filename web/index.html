@@ -107,12 +107,27 @@
     </header>
     <div id="editor-stage">
       <canvas id="editor-canvas"></canvas>
+      <!-- Three-zone sheet visualization (KP-108IN: perforation + 15 mm
+           tear-off stub at each END, plain paper edges on the sides):
+           1. inside the frame — the photo (survives tearing)
+           2. .zone-torn — prints past the tear line onto the stub, torn off
+           3. .dim / .sheet-stub — beyond the print window / paper: never appears
+           The dashed #edge-guide OUTSIDE the frame is where the tear/edge
+           can land (±1 mm feed registration). -->
+      <div id="dim-t" class="dim"></div>
+      <div id="dim-b" class="dim"></div>
+      <div id="dim-l" class="dim"></div>
+      <div id="dim-r" class="dim"></div>
+      <div id="stub-left" class="sheet-stub left"><span class="stub-label">✂ tear-off</span></div>
+      <div id="stub-right" class="sheet-stub right"><span class="stub-label">✂ tear-off</span></div>
+      <div id="torn-l" class="zone-torn left"></div>
+      <div id="torn-r" class="zone-torn right"></div>
+      <div id="edge-guide"><span class="guide-tag">tear / edge lands within ±1 mm</span></div>
       <div id="crop-frame">
         <span class="corner tl"></span><span class="corner tr"></span>
         <span class="corner bl"></span><span class="corner br"></span>
         <span class="third v1"></span><span class="third v2"></span>
         <span class="third h1"></span><span class="third h2"></span>
-        <div id="overscan-guide"><span class="guide-tag">±1 mm</span></div>
       </div>
     </div>
     <div class="editor-tools">
@@ -129,7 +144,7 @@
         </button>
       </div>
     </div>
-    <p id="editor-hint">Drag to move · pinch to zoom · the full frame prints, edges ±1 mm feed tolerance</p>
+    <p id="editor-hint">Drag to move · pinch to zoom · frame = your photo after tearing. The half-dimmed strips print past the tear line (torn off with the stubs); everything darker never reaches paper. The tear/edge lands inside the dashed band.</p>
   </div>
 
   <!-- Printer / calibration sheet -->
@@ -141,34 +156,56 @@
 
       <h3>Borderless trim calibration</h3>
       <p class="sheet-help">
-        Borderless prints are enlarged by the printer, trimming the outer few
-        mm. These values tell the server how much, and every print is
-        pre-compensated accordingly — so your crop lands on paper exactly.
-        Print the ruler page (letters <b>T&nbsp;B&nbsp;L&nbsp;R</b> match the
-        crop editor’s orientation) and enter the first readable tick per edge.
-        On the short ends (L/R), read the tick at the tear-off perforation —
-        content on the stubs doesn’t count.
+        The ruler page prints through the exact same pipeline as photos.
+        Hold it so the <b>T</b> reads on top — the letters match the crop
+        editor. Each ruler starts at the image edge and counts millimeters
+        inward, so part of every ruler lands beyond the paper edge or on the
+        tear-off stub. Per edge, read the number where the paper edge or
+        tear line crosses the ruler, and enter the four readings below —
+        every print is then shifted and bled by exactly that much, so your
+        crop lands on the final photo edge-to-edge. Sanity checks: the
+        50&nbsp;mm bars must measure 50&nbsp;mm, and ink should reach a few
+        mm past both tear lines. A white gap before a tear line shouldn’t
+        happen in borderless mode — if you see one, the media variant is
+        misconfigured, not something to calibrate around.
       </p>
+      <a id="cal-preview" href="api/calibrate/preview" target="_blank" title="Open full-size preview">
+        <img alt="Calibration sheet preview" loading="lazy" />
+        <span class="cal-preview-tag">preview — tap to enlarge</span>
+      </a>
       <button id="btn-calibrate" class="btn">Print calibration page</button>
       <div class="cal-inputs">
         <label>
-          <span>T — top</span>
-          <span class="cal-field"><input id="cal-top" type="number" min="0" max="12" step="0.1" inputmode="decimal" /> mm</span>
+          <span>T — top edge at</span>
+          <span class="cal-field"><input id="cal-top" type="number" min="-5" max="12" step="0.1" inputmode="decimal" /> mm</span>
         </label>
         <label>
-          <span>B — bottom</span>
-          <span class="cal-field"><input id="cal-bottom" type="number" min="0" max="12" step="0.1" inputmode="decimal" /> mm</span>
+          <span>B — bottom edge at</span>
+          <span class="cal-field"><input id="cal-bottom" type="number" min="-5" max="12" step="0.1" inputmode="decimal" /> mm</span>
         </label>
         <label>
-          <span>L — left</span>
-          <span class="cal-field"><input id="cal-left" type="number" min="0" max="12" step="0.1" inputmode="decimal" /> mm</span>
+          <span>L — tear line at</span>
+          <span class="cal-field"><input id="cal-left" type="number" min="-5" max="12" step="0.1" inputmode="decimal" /> mm</span>
         </label>
         <label>
-          <span>R — right</span>
-          <span class="cal-field"><input id="cal-right" type="number" min="0" max="12" step="0.1" inputmode="decimal" /> mm</span>
+          <span>R — tear line at</span>
+          <span class="cal-field"><input id="cal-right" type="number" min="-5" max="12" step="0.1" inputmode="decimal" /> mm</span>
+        </label>
+        <label>
+          <span>L — width of blue region</span>
+          <span class="cal-field"><input id="cal-blue-left" type="number" min="0" max="8" step="0.1" inputmode="decimal" /> mm</span>
+        </label>
+        <label>
+          <span>R — width of blue region</span>
+          <span class="cal-field"><input id="cal-blue-right" type="number" min="0" max="8" step="0.1" inputmode="decimal" /> mm</span>
         </label>
       </div>
-      <p class="sheet-help subtle">Stored on this device. Server defaults: <span id="cal-defaults">—</span>.</p>
+      <p class="sheet-help subtle">
+        Edge values = ruler reading where the paper edge / tear line crosses
+        (negative = it sits in the blue zone). Width of blue region = how many
+        mm wide the blue strip is on that end. Stored on this device. Server
+        defaults: <span id="cal-defaults">—</span>.
+      </p>
 
       <h3>Share-sheet on non-Chrome Android</h3>
       <p class="sheet-help">

@@ -11,20 +11,43 @@ let paper = {
   name: 'Postcard 100×148mm',
   mm: { w: 148, h: 100 },
   page: { w: 1748, h: 1181 }, // landscape px @300dpi
+  // physical sheet: 15 mm tear-off stub past a perforation at each end
+  sheet: { mm: { w: 178, h: 100 }, stubMm: 15 },
 };
 // Per-edge trim in page-mm, in editor orientation (matches the T/B/L/R
 // letters printed on the calibration page). On the raster path prints are
 // 1:1, so this is only mechanical registration (~1 mm). Calibratable.
-let overscan = { top: 1.0, bottom: 1.0, left: 1.0, right: 1.0 };
+// Measured reference defaults; negative = the mapping overshoots the paper
+// boundary on that edge. Overridden by /api/config, then by localStorage.
+let overscan = { top: 0, bottom: 0, left: -0.5, right: 1 };
+// Width of the blue overscan band visible on each end of the calibration
+// sheet (mm) — read straight off the sheet; drives the editor's tear-strip
+// zones. Ends only; the 100 mm sides have no stub (blue runs off, ~0 mm).
+let blueWidth = { left: 2, right: 2 };
+// Transport geometry: overscanning modes (cpnp; ipp jpeg with the
+// borderless media variant) put ink a few mm past the tear line; plain ipp
+// jpeg aspect-fits the paper rect (ink stops ≈ at the tear line).
+let printFormat = 'jpeg';
+let mediaVariant = 'borderless';
 
-const OVERSCAN_KEY = 'selphy-overscan-v2';
+const OVERSCAN_KEY = 'selphy-overscan-v4';
 const EDGES = ['top', 'bottom', 'left', 'right'];
-function effectiveOverscan() {
+function savedCal() {
   try {
-    const saved = JSON.parse(localStorage.getItem(OVERSCAN_KEY));
-    if (saved && EDGES.every((e) => isFinite(saved[e]))) return saved;
-  } catch {}
-  return overscan;
+    return JSON.parse(localStorage.getItem(OVERSCAN_KEY)) || {};
+  } catch {
+    return {};
+  }
+}
+function effectiveOverscan() {
+  const saved = savedCal();
+  return EDGES.every((e) => isFinite(saved[e])) ? saved : overscan;
+}
+function effectiveBlueWidth() {
+  const saved = savedCal();
+  return isFinite(saved.blueLeft) && isFinite(saved.blueRight)
+    ? { left: saved.blueLeft, right: saved.blueRight }
+    : blueWidth;
 }
 
 // Queue items: { id, blob, url, bitmap?, crop: {cx, cy, scale, rotate}, copies, state }
@@ -74,9 +97,17 @@ setInterval(pollStatus, 10000);
 // Printer sheet: status details + borderless-trim calibration.
 $('printer-status').addEventListener('click', () => {
   const os = effectiveOverscan();
+  const bw = effectiveBlueWidth();
   for (const e of EDGES) $('cal-' + e).value = os[e];
-  $('cal-defaults').textContent = EDGES.map((e) => `${e[0].toUpperCase()} ${overscan[e]}`).join(' · ') + ' mm';
+  $('cal-blue-left').value = bw.left;
+  $('cal-blue-right').value = bw.right;
+  $('cal-defaults').textContent =
+    EDGES.map((e) => `${e[0].toUpperCase()} ${overscan[e]}`).join(' · ') +
+    ` · blue ${blueWidth.left}/${blueWidth.right} mm`;
   $('settings-printer').textContent = $('status-text').textContent;
+  // load the calibration preview lazily, only when the sheet opens
+  const img = document.querySelector('#cal-preview img');
+  if (!img.src) img.src = 'api/calibrate/preview';
   $('settings').hidden = false;
 });
 $('settings-close').addEventListener('click', () => ($('settings').hidden = true));
@@ -96,13 +127,19 @@ $('btn-calibrate').addEventListener('click', async () => {
 $('cal-save').addEventListener('click', () => {
   const values = {};
   for (const e of EDGES) values[e] = parseFloat($('cal-' + e).value);
-  if (!EDGES.every((e) => isFinite(values[e]) && values[e] >= 0 && values[e] <= 12)) {
-    toast('Enter trim values between 0 and 12 mm');
+  values.blueLeft = parseFloat($('cal-blue-left').value);
+  values.blueRight = parseFloat($('cal-blue-right').value);
+  if (!EDGES.every((e) => isFinite(values[e]) && values[e] >= -5 && values[e] <= 12)) {
+    toast('Edge values must be between -5 and 12 mm');
+    return;
+  }
+  if (![values.blueLeft, values.blueRight].every((v) => isFinite(v) && v >= 0 && v <= 8)) {
+    toast('Blue region width must be between 0 and 8 mm');
     return;
   }
   localStorage.setItem(OVERSCAN_KEY, JSON.stringify(values));
   $('settings').hidden = true;
-  toast('Safe area updated for this device');
+  toast('Calibration updated for this device');
 });
 
 // If the share POST hit the server instead of the service worker (first-ever
@@ -127,6 +164,9 @@ async function fetchConfig() {
     const cfg = await res.json();
     if (cfg.paper) paper = cfg.paper;
     if (cfg.overscan) overscan = cfg.overscan;
+    if (cfg.blueWidth) blueWidth = cfg.blueWidth;
+    if (cfg.printFormat) printFormat = cfg.printFormat;
+    if (cfg.mediaVariant) mediaVariant = cfg.mediaVariant;
   } catch {}
 }
 
@@ -210,7 +250,7 @@ const stage = $('editor-stage');
 const canvas = $('editor-canvas');
 const ctx = canvas.getContext('2d');
 const frameEl = $('crop-frame');
-const guideEl = $('overscan-guide');
+
 
 let ed = null; // { item, bitmap, crop:{cx,cy,scale}, rotate, copies, frame:{x,y,w,h} }
 
@@ -271,7 +311,12 @@ function layoutEditor() {
 
   const a = paperAspect();
   const pad = 24;
-  let fw = r.width - pad * 2;
+  // Reserve room for the tear-off stubs (15 mm past a perforation at each
+  // END of the physical sheet; the sides have none) so the sheet context
+  // always fits the stage.
+  const stubMm = paper.sheet?.stubMm ?? 15;
+  const stubFrac = stubMm / paper.mm.w;
+  let fw = (r.width - pad * 2) / (1 + 2 * stubFrac);
   let fh = fw / a;
   if (fh > r.height - pad * 2) {
     fh = r.height - pad * 2;
@@ -287,19 +332,41 @@ function layoutEditor() {
     width: fw + 'px',
     height: fh + 'px',
   });
-  // The render pre-compensates the calibrated trim, so the full frame lands
-  // on paper. What remains is mechanical feed variance (~±1 mm): show a thin
-  // tolerance band — content inside it is guaranteed, the band itself may
-  // gain/lose a hair.
+  // Three-zone sheet visualization. Screen px per mm:
+  const mmX = fw / paper.mm.w;
+  const mmY = fh / paper.mm.h;
+  const stubW = stubFrac * fw;
+  // How far ink prints past the tear line onto the stub: the blue region
+  // width (mm of blue past the nominal edge) minus where the tear line sits
+  // (calibration value, mm inward — may be negative). Plain media has no
+  // overscan; only the ~registration overlap remains.
+  const ov = effectiveOverscan();
+  const bw = effectiveBlueWidth();
+  const overscans = printFormat === 'cpnp' || mediaVariant === 'borderless';
+  const overL = overscans ? Math.max(0, bw.left - ov.left) : 1;
+  const overR = overscans ? Math.max(0, bw.right - ov.right) : 1;
+  const tornL = overL * mmX;
+  const tornR = overR * mmX;
+  const rect = (id, x, y, w, h) =>
+    Object.assign($(id).style, { left: x + 'px', top: y + 'px', width: Math.max(0, w) + 'px', height: Math.max(0, h) + 'px' });
+
+  // layer 3 — never reaches paper: everything outside frame + torn strips
+  rect('dim-t', 0, 0, r.width, fy);
+  rect('dim-b', 0, fy + fh, r.width, r.height - fy - fh);
+  rect('dim-l', 0, fy, fx - tornL, fh);
+  rect('dim-r', fx + fw + tornR, fy, r.width - fx - fw - tornR, fh);
+  // hatched paper for the un-inked remainder of each 15 mm stub
+  rect('stub-left', fx - stubW, fy, stubW - tornL, fh);
+  rect('stub-right', fx + fw + tornR, fy, stubW - tornR, fh);
+  // layer 2 — prints past the tear line, torn off with the stub
+  rect('torn-l', fx - tornL, fy, tornL, fh);
+  rect('torn-r', fx + fw, fy, tornR, fh);
+  // Feed registration: the tear/edge lands within ±1 mm of the frame edge —
+  // drawn OUTSIDE the frame. Ink always overlaps the tear line (no white
+  // ever); what varies is which content sits at the tear.
   const TOLERANCE_MM = 1;
-  const insX = (TOLERANCE_MM / paper.mm.w) * fw;
-  const insY = (TOLERANCE_MM / paper.mm.h) * fh;
-  Object.assign(guideEl.style, {
-    left: insX + 'px',
-    top: insY + 'px',
-    width: fw - 2 * insX + 'px',
-    height: fh - 2 * insY + 'px',
-  });
+  rect('edge-guide', fx - TOLERANCE_MM * mmX, fy - TOLERANCE_MM * mmY,
+    fw + 2 * TOLERANCE_MM * mmX, fh + 2 * TOLERANCE_MM * mmY);
 }
 
 function draw() {

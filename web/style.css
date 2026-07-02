@@ -387,8 +387,40 @@ body {
   position: absolute;
   border: 1px solid rgba(255, 255, 255, 0.85);
   border-radius: 2px;
-  box-shadow: 0 0 0 4000px rgba(4, 5, 7, 0.62);
   pointer-events: none;
+}
+
+/* zone 3 — never reaches paper (outside the print window / off the sheet) */
+.dim {
+  position: absolute;
+  pointer-events: none;
+  background: rgba(4, 5, 7, 0.8);
+}
+/* zone 2 — prints past the tear line onto the stub, torn off with it */
+.zone-torn {
+  position: absolute;
+  pointer-events: none;
+  background: rgba(4, 5, 7, 0.42);
+}
+.zone-torn.left {
+  border-right: 2px dashed rgba(255, 255, 255, 0.75); /* the tear line */
+  border-left: 1px solid rgba(255, 255, 255, 0.3); /* ink stops here */
+}
+.zone-torn.right {
+  border-left: 2px dashed rgba(255, 255, 255, 0.75);
+  border-right: 1px solid rgba(255, 255, 255, 0.3);
+}
+/* feed registration: the tear/edge can land anywhere inside this band */
+#edge-guide {
+  position: absolute;
+  pointer-events: none;
+  border: 1.5px dashed rgba(255, 214, 130, 0.7);
+  border-radius: 3px;
+}
+#edge-guide .guide-tag {
+  position: absolute;
+  top: -18px;
+  left: 2px;
 }
 .corner {
   position: absolute;
@@ -408,11 +440,32 @@ body {
 .third.h1 { top: 33.333%; left: 0; right: 0; height: 1px; }
 .third.h2 { top: 66.666%; left: 0; right: 0; height: 1px; }
 
-#overscan-guide {
+
+/* Tear-off stubs of the physical KP-108IN sheet: 15 mm past a perforation
+   at each END (none on the sides). The print bleeds a few mm into them,
+   but they are torn off — drawn as hatched paper, not photo. */
+.sheet-stub {
   position: absolute;
-  border: 1.5px dashed rgba(255, 214, 130, 0.75);
-  border-radius: 2px;
+  pointer-events: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background:
+    repeating-linear-gradient(45deg, rgba(255, 255, 255, 0.05) 0 6px, transparent 6px 12px),
+    rgba(216, 219, 228, 0.14);
 }
+.sheet-stub.left { border-radius: 3px 0 0 3px; }
+.sheet-stub.right { border-radius: 0 3px 3px 0; }
+.stub-label {
+  writing-mode: vertical-rl;
+  font-size: 11px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.5);
+  user-select: none;
+}
+.sheet-stub.left .stub-label { transform: rotate(180deg); }
+
 .guide-tag {
   position: absolute;
   top: 4px;
@@ -479,6 +532,14 @@ body {
   padding: 22px 22px calc(env(safe-area-inset-bottom, 0px) + 18px);
   box-shadow: var(--shadow-2);
   animation: sheet-in 0.22s cubic-bezier(0.2, 0.9, 0.3, 1);
+  /* Cap to the viewport and scroll internally — the calibration form is tall
+     and would otherwise run off the top of the screen with no way to reach it.
+     dvh tracks mobile browser chrome; vh is the fallback. */
+  max-height: 90vh;
+  max-height: 90dvh;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
 }
 @keyframes sheet-in {
   from { transform: translateY(30px); opacity: 0; }
@@ -489,6 +550,39 @@ body {
 .sheet-help { color: var(--muted); font-size: 13px; margin: 0 0 12px; }
 .sheet-help a { color: var(--accent-2); font-weight: 600; text-decoration: none; }
 .sheet-help.subtle { color: var(--faint); font-size: 12px; margin: 10px 0 0; }
+#cal-preview {
+  position: relative;
+  display: block;
+  margin: 4px 0 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  overflow: hidden;
+  background: var(--surface-2);
+}
+#cal-preview img {
+  display: block;
+  width: 100%;
+  aspect-ratio: 148 / 100;
+  object-fit: contain;
+}
+.cal-preview-tag {
+  position: absolute;
+  right: 8px;
+  bottom: 8px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.85);
+  background: rgba(10, 11, 14, 0.72);
+  border-radius: 999px;
+  padding: 3px 9px;
+}
+.cal-buttons {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
 .cal-inputs {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -520,7 +614,15 @@ body {
   display: flex;
   justify-content: flex-end;
   gap: 10px;
-  margin-top: 18px;
+  /* Keep Close/Save pinned to the bottom of the scrolling sheet so they stay
+     reachable no matter how tall the form gets. Sticks within the sheet's
+     content box (above its bottom padding), with a fade so scrolled content
+     doesn't butt up against the buttons. */
+  position: sticky;
+  bottom: 0;
+  margin-top: 8px;
+  padding: 12px 0 6px;
+  background: linear-gradient(to top, var(--surface) 78%, transparent);
 }
 
 /* ---------- toast ---------- */
