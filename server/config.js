@@ -1,8 +1,34 @@
 /* Configuration via environment variables (12-factor, Nix/Docker friendly). */
 
 import path from 'node:path';
+import { readdirSync } from 'node:fs';
 
 const env = process.env;
+
+/* Discover selectable ICC profiles: every *.icc in the profiles dir becomes a
+ * choice the client can switch between per print (id = filename). ICC_PROFILE,
+ * if set and outside the dir, is added too and becomes the default. */
+function discoverIccProfiles() {
+  const dir = env.ICC_DIR || path.join(process.cwd(), 'profiles');
+  let list = [];
+  try {
+    list = readdirSync(dir)
+      .filter((f) => /\.icc$/i.test(f))
+      .sort()
+      .map((f) => ({ id: f, name: f.replace(/\.icc$/i, ''), path: path.join(dir, f) }));
+  } catch {
+    /* no dir → no profiles */
+  }
+  if (env.ICC_PROFILE) {
+    const base = path.basename(env.ICC_PROFILE);
+    if (!list.some((p) => p.path === env.ICC_PROFILE || p.id === base)) {
+      list.unshift({ id: base, name: base.replace(/\.icc$/i, ''), path: env.ICC_PROFILE });
+    }
+  }
+  const defaultId = env.ICC_PROFILE ? path.basename(env.ICC_PROFILE) : list[0]?.id || null;
+  return { list, defaultId };
+}
+const { list: iccProfiles, defaultId: iccDefaultId } = discoverIccProfiles();
 
 /* Postcard KP-108IN geometry, all landscape px @300dpi.
  *
@@ -121,7 +147,9 @@ export const config = {
   blueWidth,
 
   icc: {
-    profile: env.ICC_PROFILE || null, // absolute path to .icc, empty = no color management
+    // Selectable profiles (client picks per print; empty = no color management).
+    profiles: iccProfiles, // [{ id, name, path }]
+    defaultId: iccDefaultId, // id used when the client hasn't chosen
     // Relative colorimetric (with black-point compensation, always applied in
     // render.js) is the standard best default for photo printing: it leaves
     // in-gamut colors accurate and only remaps what's out of gamut, so smooth

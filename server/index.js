@@ -144,7 +144,12 @@ app.get('/api/config', async () => ({
   printFormat: config.printFormat,
   mediaVariant: config.mediaVariant,
   blueWidth: config.blueWidth,
-  icc: { enabled: !!config.icc.profile, intent: config.icc.intent },
+  icc: {
+    enabled: config.icc.profiles.length > 0,
+    intent: config.icc.intent,
+    profiles: config.icc.profiles.map((p) => ({ id: p.id, name: p.name })),
+    defaultId: config.icc.defaultId,
+  },
   printerConfigured: !!printerUrl(),
 }));
 
@@ -227,6 +232,20 @@ function buildRenderPlan(options) {
   return { target, bleed: outBleed, padWhite: !borderless, raster: !!raster };
 }
 
+// Resolve the ICC options for a job into a renderForPrint icc object. The
+// client sends options.iccProfile = a profile id, '' / 'none' to disable, or
+// omits it to use the server default. (options.icc === false also disables,
+// for older clients.)
+function resolveIcc(options) {
+  const choice = options.iccProfile;
+  if (options.icc === false || choice === '' || choice === 'none') return {};
+  const list = config.icc.profiles;
+  let entry = choice ? list.find((p) => p.id === choice) : null;
+  if (!entry) entry = list.find((p) => p.id === config.icc.defaultId);
+  if (!entry) return {};
+  return { profile: entry.path, intent: config.icc.intent, quality: config.icc.quality };
+}
+
 // Parse the multipart body of a print/preview request: the image + options.
 async function parsePrintRequest(req) {
   let imageBuf = null;
@@ -252,7 +271,7 @@ app.post('/api/print', async (req, reply) => {
 
   const copies = Math.min(Math.max(parseInt(options.copies, 10) || 1, 1), 99);
   // ICC is on unless the client explicitly opts out (color A/B testing).
-  const icc = options.icc === false ? {} : config.icc;
+  const icc = resolveIcc(options);
   const plan = buildRenderPlan(options);
   const rotate = [0, 90, 180, 270].includes(options.rotate) ? options.rotate : 0;
   const crop = options.crop || null;
@@ -314,7 +333,7 @@ app.post('/api/preview', async (req, reply) => {
   }
   if (!imageBuf) return reply.code(400).send('missing image');
 
-  const icc = options.icc === false ? {} : config.icc;
+  const icc = resolveIcc(options);
   const plan = buildRenderPlan(options);
   const rotate = [0, 90, 180, 270].includes(options.rotate) ? options.rotate : 0;
   // Render to raw pixels (lossless; ICC via tificc) and encode the preview
@@ -444,7 +463,8 @@ app.listen({ port: config.port, host: config.host }).then(() => {
   app.log.info(
     {
       printer: printerUrl() || '(unset — set PRINTER_HOST)',
-      icc: config.icc.profile || '(none — set ICC_PROFILE)',
+      iccProfiles: config.icc.profiles.map((p) => p.id),
+      iccDefault: config.icc.defaultId || '(none)',
       paper: config.paper.name,
       archive: config.archiveDir || '(off)',
     },

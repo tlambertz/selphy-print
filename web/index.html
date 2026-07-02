@@ -215,10 +215,9 @@
       </p>
 
       <h3>Color management</h3>
-      <label class="switch" title="Convert into the printer's ICC profile before sending. Turn off to compare — if colors look better without it, the profile or the printer's Image Optimize setting is mismatched.">
-        <input type="checkbox" id="opt-icc" />
-        <span class="track"><span class="thumb"></span></span>
-        <span class="switch-label">Apply ICC profile</span>
+      <label class="cal-row" title="Which ICC profile to convert into before sending. Switch to compare looks — Off sends the image untouched.">
+        <span>Color profile</span>
+        <select id="opt-icc" class="cal-select"></select>
       </label>
       <p class="sheet-help subtle" id="icc-note">
         Applies to prints and the crop Preview, so you can A/B the color.

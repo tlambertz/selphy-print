@@ -51,12 +51,34 @@ function effectiveBlueWidth() {
 }
 
 // ICC color management: on by default when the server has a profile; the user
-// can turn it off (per device) to A/B the color on prints and the Preview.
-let iccAvailable = false;
-const ICC_KEY = 'selphy-icc';
-function iccEnabled() {
-  const v = localStorage.getItem(ICC_KEY);
-  return v === null ? true : v === '1';
+// pick which one (or Off) per device, applied to prints and the Preview.
+let iccProfiles = []; // [{id,name}] from the server
+let iccDefault = null; // server default id
+const ICC_KEY = 'selphy-icc-profile';
+// Returns the chosen profile id to send as options.iccProfile: '' = off, an id,
+// or the server default when the user hasn't chosen.
+function iccChoice() {
+  const saved = localStorage.getItem(ICC_KEY);
+  if (saved !== null) return saved;
+  return iccDefault || '';
+}
+function populateIccSelect() {
+  const sel = $('opt-icc');
+  const note = $('icc-note');
+  sel.innerHTML = '';
+  if (!iccProfiles.length) {
+    sel.add(new Option('No profiles found', ''));
+    sel.disabled = true;
+    note.textContent = 'No ICC profiles on the server — drop .icc files in the profiles/ folder and restart.';
+    return;
+  }
+  sel.disabled = false;
+  sel.add(new Option('Off — no color management', ''));
+  for (const p of iccProfiles) {
+    sel.add(new Option(p.name + (p.id === iccDefault ? ' (default)' : ''), p.id));
+  }
+  sel.value = iccChoice();
+  note.textContent = 'Applies to prints and the crop Preview, so you can A/B the color.';
 }
 
 // Queue items: { id, blob, url, bitmap?, crop: {cx, cy, scale, rotate}, copies, state }
@@ -158,12 +180,7 @@ $('printer-status').addEventListener('click', () => {
   $('cal-defaults').textContent =
     EDGES.map((e) => `${e[0].toUpperCase()} ${overscan[e]}`).join(' · ') +
     ` · blue ${blueWidth.left}/${blueWidth.right} mm`;
-  const iccBox = $('opt-icc');
-  iccBox.checked = iccEnabled() && iccAvailable;
-  iccBox.disabled = !iccAvailable;
-  $('icc-note').textContent = iccAvailable
-    ? 'Applies to prints and the crop Preview, so you can A/B the color.'
-    : 'No ICC profile loaded on the server (set ICC_PROFILE) — prints go out untouched.';
+  populateIccSelect();
   $('settings-printer').textContent = $('status-text').textContent;
   // load the calibration preview lazily, only when the sheet opens
   const img = document.querySelector('#cal-preview img');
@@ -225,7 +242,7 @@ async function fetchConfig() {
     if (cfg.paper) paper = cfg.paper;
     if (cfg.overscan) overscan = cfg.overscan;
     if (cfg.blueWidth) blueWidth = cfg.blueWidth;
-    if (cfg.icc) iccAvailable = !!cfg.icc.enabled;
+    if (cfg.icc) { iccProfiles = cfg.icc.profiles || []; iccDefault = cfg.icc.defaultId || null; }
     if (cfg.printFormat) printFormat = cfg.printFormat;
     if (cfg.mediaVariant) mediaVariant = cfg.mediaVariant;
   } catch {}
@@ -593,7 +610,7 @@ $('ed-copies-plus').addEventListener('click', () => {
   $('ed-copies').textContent = ed.copies + '×';
 });
 $('opt-icc').addEventListener('change', (e) => {
-  localStorage.setItem(ICC_KEY, e.target.checked ? '1' : '0');
+  localStorage.setItem(ICC_KEY, e.target.value);
 });
 
 // Crop rect (image fractions) for the LIVE editor state — mirrors cropForPrint.
@@ -620,7 +637,7 @@ async function showPreview() {
       rotate: ed.rotate,
       border: ed.border,
       overscan: effectiveOverscan(),
-      icc: iccEnabled(),
+      iccProfile: iccChoice(),
     }));
     const res = await fetch('api/preview', { method: 'POST', body: form });
     if (!res.ok) throw new Error((await res.text()) || res.statusText);
@@ -685,7 +702,7 @@ async function printAll() {
           border: !!item.border,
           // per-device calibration → the server pre-compensates the render
           overscan: effectiveOverscan(),
-          icc: iccEnabled(),
+          iccProfile: iccChoice(),
         })
       );
       const res = await fetch('api/print', { method: 'POST', body: form });
