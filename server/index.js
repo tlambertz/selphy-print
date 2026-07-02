@@ -7,6 +7,7 @@ import { config, printerUrl } from './config.js';
 import { getPrinterAttributes, getJobAttributes, printJob } from './ipp.js';
 import { renderForPrint, renderCalibration } from './render.js';
 import { encodePwg, encodeUrf } from './pwg.js';
+import { cpnpPrint } from './cpnp.js';
 
 const RASTER = {
   pwg: { mime: 'image/pwg-raster', encode: encodePwg },
@@ -157,17 +158,40 @@ app.post('/api/print', async (req, reply) => {
   const job = enqueue(async (job) => {
     job.state = 'rendering';
     job.stateText = 'processing image…';
-    // Always a full-page raster, printed 1:1 (PWG + plain media).
-    // Borderless: crop fills the calibrated surviving window, mirrored
-    // bleed covers the registration zone. White border: the image sits in
-    // the printable-area window and the "bleed" is white padding.
+
+    if (config.printFormat === 'cpnp') {
+      // Canon's own path: JPEG at the app's render size (1752×1184 → portrait
+      // 1184×1752), borderless flag in the spool header does the full bleed.
+      // The firmware overscans, so pre-compensate with the calibrated bleed.
+      const jpeg = await renderForPrint(imageBuf, {
+        crop: options.crop || null,
+        rotate: [0, 90, 180, 270].includes(options.rotate) ? options.rotate : 0,
+        target: config.paper.canonPage,
+        bleed: borderless ? bleed : { top: 30, bottom: 30, left: 44, right: 44 },
+        padWhite: !borderless,
+        icc: config.icc,
+        output: 'jpeg',
+      });
+      const url = printerUrl();
+      const host = new URL(url).hostname;
+      for (let i = 0; i < copies; i++) {
+        job.state = 'printing';
+        job.stateText = copies > 1 ? `printing ${i + 1}/${copies}…` : 'printing…';
+        await cpnpPrint(host, jpeg, {
+          width: config.paper.canonPage.h, // portrait after rotate
+          height: config.paper.canonPage.w,
+          onState: (s) => { job.stateText = 'printer: ' + s; },
+        });
+      }
+      return;
+    }
+
+    // IPP fallbacks (raster / jpeg) — kept for experimentation.
     const rendered = await renderForPrint(imageBuf, {
       crop: options.crop || null,
       rotate: [0, 90, 180, 270].includes(options.rotate) ? options.rotate : 0,
       target: config.paper.page,
-      bleed: borderless
-        ? bleed
-        : { top: 30, bottom: 30, left: 44, right: 44 }, // 2.5 / 3.7 mm white frame
+      bleed: borderless ? bleed : { top: 30, bottom: 30, left: 44, right: 44 },
       padWhite: !borderless,
       icc: config.icc,
       output: RASTER[config.printFormat] ? 'raw' : 'jpeg',
@@ -197,6 +221,18 @@ app.post('/api/calibrate', async () => {
     job.state = 'rendering';
     job.stateText = 'rendering calibration page…';
     // Full-page ruler through the same path as photos.
+    if (config.printFormat === 'cpnp') {
+      const jpeg = await renderCalibration(config.paper.canonPage);
+      const host = new URL(printerUrl()).hostname;
+      job.state = 'printing';
+      job.stateText = 'printing…';
+      await cpnpPrint(host, jpeg, {
+        width: config.paper.canonPage.h,
+        height: config.paper.canonPage.w,
+        onState: (s) => { job.stateText = 'printer: ' + s; },
+      });
+      return;
+    }
     const raster = RASTER[config.printFormat];
     if (raster) {
       const r = await renderCalibration(config.paper.page, 300, 'raw');

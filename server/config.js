@@ -96,7 +96,9 @@ export const config = {
    *   variant" recipe) — deterministic geometry, residuals calibratable.
    * - mediaVariant 'borderless' (zero-margin media-col) instead engages the
    *   firmware enlargement — only useful for experiments. */
-  printFormat: env.PRINT_FORMAT || 'urf', // 'urf' | 'pwg' | 'jpeg'
+  // 'cpnp' = Canon's own protocol (the only true full-bleed path — sends
+  // JPEG with the borderless spool flag). 'urf'/'pwg'/'jpeg' = IPP fallbacks.
+  printFormat: env.PRINT_FORMAT || 'cpnp',
   mediaVariant: env.MEDIA_VARIANT || 'plain', // 'plain' | 'borderless'
   printScaling: env.PRINT_SCALING || null, // ignored by CP1500; experiments only
 

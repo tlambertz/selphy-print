@@ -89,14 +89,14 @@ export async function discover(host) {
   return reply.subarray(16).toString('latin1').replace(/\0+$/, '');
 }
 
+// Returns { sessionId, tcpPort } — the printer allocates a per-session data
+// port (reply bytes 20-21) and a session id (bytes 10-11).
 async function sessionStart(host) {
-  // 408-byte datagram: 24-byte base + name@24 + user@88 + doc@152, zero-padded.
   const buf = Buffer.alloc(408);
-  // 24-byte base; payload length 0x0188 (=392) is big-endian at bytes 14-15.
+  // 24-byte base; payload length 0x0188 (=392) big-endian at bytes 14-15.
   const base = [67, 80, 78, 80, 1, 0x10, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0x88, 0, 0, 0, 0, 0, 0, 0, 0];
   Buffer.from(base).copy(buf, 0);
-  const id = nextPacketId();
-  setPacketId(buf, id);
+  setPacketId(buf, nextPacketId());
   const name = Buffer.from('selphy-print', 'utf16le').swap16(); // UTF-16BE
   name.copy(buf, 24, 0, Math.min(name.length, 64));
   SESSION_USER.copy(buf, 88);
@@ -104,12 +104,16 @@ async function sessionStart(host) {
   const reply = await udpExchange(host, buf, { expectOpcode: OP.sessionStart });
   const result = beResult(reply);
   if (result !== 0) throw new Error(`CPNP sessionStart failed: result ${result}`);
-  return true;
+  const sessionId = (reply[10] << 8) | reply[11];
+  const tcpPort = (reply[20] << 8) | reply[21];
+  if (!sessionId || !tcpPort) throw new Error('CPNP sessionStart: no session/port in reply');
+  return { sessionId, tcpPort };
 }
 
-async function sessionEnd(host) {
+async function sessionEnd(host, sessionId) {
   const buf = Buffer.from([67, 80, 78, 80, 1, 0x11, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
   setPacketId(buf, nextPacketId());
+  if (sessionId) { buf[10] = (sessionId >> 8) & 0xff; buf[11] = sessionId & 0xff; }
   try {
     await udpExchange(host, buf, { expectOpcode: OP.sessionEnd, timeoutMs: 2000 });
   } catch {
@@ -159,11 +163,11 @@ class TcpConn {
   close() { try { this.sock.destroy(); } catch {} }
 }
 
-function tcpConnect(host) {
+function tcpConnect(host, port) {
   return new Promise((resolve, reject) => {
-    const sock = net.connect({ host, port: PORT }, () => resolve(new TcpConn(sock)));
+    const sock = net.connect({ host, port }, () => resolve(new TcpConn(sock)));
     sock.once('error', reject);
-    sock.setTimeout(10000);
+    sock.setTimeout(15000);
   });
 }
 
@@ -175,26 +179,40 @@ async function readFrame(conn) {
   return { head, body, result: beResult(head) };
 }
 
-async function negotiateMaxWriteSize(conn) {
+function setSession(buf, sessionId) {
+  buf[10] = (sessionId >> 8) & 0xff;
+  buf[11] = sessionId & 0xff;
+}
+
+async function negotiateMaxWriteSize(conn, sessionId) {
   const set = Buffer.from([67, 80, 78, 80, 1, 0x52, 0, 0, 0, 0, 0, 0, 0, 0, 0, 4, 0, 0, 0x84, 0]);
   setPacketId(set, nextPacketId());
+  setSession(set, sessionId);
   await conn.write(set);
   const reply = await readFrame(conn);
   if (reply.result !== 0) throw new Error(`SetMaxWriteSize failed: ${reply.result}`);
 }
 
-// Wrap a payload in a CPNP write frame (opcode 0x21) and send over TCP.
-async function writeData(conn, payload) {
-  const head = Buffer.from([67, 80, 78, 80, 1, 0x21, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
-  setPacketId(head, nextPacketId());
-  // payload length @12-15 big-endian
-  head[12] = (payload.length >>> 24) & 0xff;
-  head[13] = (payload.length >>> 16) & 0xff;
-  head[14] = (payload.length >>> 8) & 0xff;
-  head[15] = payload.length & 0xff;
-  await conn.write(Buffer.concat([head, payload]));
-  const reply = await readFrame(conn);
-  if (reply.result !== 0) throw new Error(`write frame rejected: ${reply.result}`);
+// Wrap a command payload in CPNP write frames (opcode 0x21) over TCP,
+// splitting into <= MAX_CHUNK pieces. Every frame carries sessionId@10-11
+// and its piece length (big-endian) @12-15. Returns the last frame's result.
+async function writeData(conn, sessionId, payload) {
+  let lastResult = 0;
+  for (let off = 0; off < payload.length; off += MAX_CHUNK) {
+    const piece = payload.subarray(off, Math.min(off + MAX_CHUNK, payload.length));
+    const head = Buffer.from([67, 80, 78, 80, 1, 0x21, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+    setPacketId(head, nextPacketId());
+    setSession(head, sessionId);
+    head[12] = (piece.length >>> 24) & 0xff;
+    head[13] = (piece.length >>> 16) & 0xff;
+    head[14] = (piece.length >>> 8) & 0xff;
+    head[15] = piece.length & 0xff;
+    await conn.write(Buffer.concat([head, piece]));
+    const reply = await readFrame(conn);
+    lastResult = reply.result;
+    if (reply.result !== 0) throw new Error(`write frame rejected: result ${reply.result}`);
+  }
+  return lastResult;
 }
 
 /* ---------- payload builders (little-endian inner fields) ---------- */
@@ -251,32 +269,38 @@ function makeSimple(code, { typePrint = 0 } = {}) {
  * @param {object} opts { width, height, typePrint, typeJpeg, onState }
  */
 export async function cpnpPrint(host, jpeg, opts = {}) {
-  const { width, height, onState = () => {} } = opts;
+  const { width, height, onState = () => {}, dryRun = false } = opts;
   const constants = { typePrint: opts.typePrint ?? 0, typeJpeg: opts.typeJpeg ?? 0 };
 
+  onState('session');
+  const { sessionId, tcpPort } = await sessionStart(host);
   onState('connecting');
-  const conn = await tcpConnect(host);
+  const conn = await tcpConnect(host, tcpPort);
+  const results = {};
   try {
-    onState('session');
-    await sessionStart(host);
-    await negotiateMaxWriteSize(conn);
+    await negotiateMaxWriteSize(conn, sessionId);
 
     onState('spool');
-    await writeData(conn, makeStartSpool(jpeg.length, constants));
+    // Per-image data: the transfer header (104B) + JPEG bytes is itself the
+    // command payload; writeData splits it into CPNP write frames.
+    results.startSpool = await writeData(conn, sessionId, makeStartSpool(jpeg.length, constants));
 
     onState('data');
-    for (let off = 0; off < jpeg.length; off += MAX_CHUNK - 104) {
-      const chunk = jpeg.subarray(off, Math.min(off + (MAX_CHUNK - 104), jpeg.length));
-      const header = makeTransferHeader(chunk, off, jpeg.length, width, height, jpeg.length, constants);
-      await writeData(conn, Buffer.concat([header, chunk]));
+    const header = makeTransferHeader(jpeg, 0, jpeg.length, width, height, jpeg.length, constants);
+    results.data = await writeData(conn, sessionId, Buffer.concat([header, jpeg]));
+
+    if (dryRun) {
+      onState('dry-run-complete');
+      return { sessionId, tcpPort, results, printed: false };
     }
 
     onState('execute');
-    await writeData(conn, makeSimple(CODE.executeSpoolPrint, constants));
-    await writeData(conn, makeSimple(CODE.endPrint, constants));
+    results.execute = await writeData(conn, sessionId, makeSimple(CODE.executeSpoolPrint, constants));
+    results.end = await writeData(conn, sessionId, makeSimple(CODE.endPrint, constants));
   } finally {
     conn.close();
-    await sessionEnd(host);
+    await sessionEnd(host, sessionId);
   }
   onState('done');
+  return { sessionId, tcpPort, results, printed: !dryRun };
 }
