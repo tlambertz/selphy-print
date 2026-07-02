@@ -93,7 +93,7 @@ export const config = {
    *   variant" recipe) — deterministic geometry, residuals calibratable.
    * - mediaVariant 'borderless' (zero-margin media-col) instead engages the
    *   firmware enlargement — only useful for experiments. */
-  printFormat: env.PRINT_FORMAT || 'pwg', // 'pwg' | 'jpeg'
+  printFormat: env.PRINT_FORMAT || 'urf', // 'urf' | 'pwg' | 'jpeg'
   mediaVariant: env.MEDIA_VARIANT || 'plain', // 'plain' | 'borderless'
   printScaling: env.PRINT_SCALING || null, // ignored by CP1500; experiments only
 

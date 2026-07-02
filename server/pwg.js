@@ -1,7 +1,8 @@
-/* Minimal PWG raster encoder (PWG 5102.4) — enough for one sRGB 8-bit page
-   at 300 dpi, which is all the SELPHY accepts (pwg-raster-document-type-
-   supported: rgb_8, 300dpi). Header field offsets verified against a
-   cupsfilter-generated reference. */
+/* Minimal PWG (PWG 5102.4) and URF/UNIRAST raster encoders — one sRGB 8-bit
+   page at 300 dpi, which is all the SELPHY accepts. PWG header field offsets
+   verified against a cupsfilter-generated reference; URF layout taken from
+   cups-filters 1.x urftopdf.cpp. Both formats share the same line-repeat +
+   packbits-style compression. */
 
 const HEADER_SIZE = 1796;
 
@@ -48,6 +49,54 @@ export function encodePwg(rgb, width, height, dpi = 300) {
   // PWG compression: <repeated-lines-1> then per-line runs:
   // control n in 0..127 → next pixel repeats n+1 times
   // control n in 129..255 → 257-n literal pixels follow
+  let y = 0;
+  while (y < height) {
+    const line = rgb.subarray(y * bpl, (y + 1) * bpl);
+    let repeat = 1;
+    while (
+      y + repeat < height &&
+      repeat <= 255 &&
+      line.compare(rgb, (y + repeat) * bpl, (y + repeat + 1) * bpl) === 0
+    ) {
+      repeat++;
+    }
+    if (repeat > 256) repeat = 256;
+    chunks.push(Buffer.from([repeat - 1]));
+    chunks.push(compressLine(line, width));
+    y += repeat;
+  }
+  return Buffer.concat(chunks);
+}
+
+/**
+ * URF/UNIRAST — the AirPrint raster format, and the CP1500's
+ * document-format-preferred. urf-supported: W8,SRGB24,RS300,PQ4.
+ */
+export function encodeUrf(rgb, width, height, dpi = 300, opts = {}) {
+  if (rgb.length !== width * height * 3) {
+    throw new Error(`pixel buffer ${rgb.length} != ${width}x${height}x3`);
+  }
+  const fileHeader = Buffer.alloc(12);
+  fileHeader.write('UNIRAST', 0, 'ascii'); // byte 7 stays \0
+  fileHeader.writeUInt32BE(1, 8); // page count
+
+  // 32-byte page header (cups-filters urftopdf.cpp struct urf_page_header):
+  // u8 bpp, u8 colorspace, u8 duplex, u8 quality, u32 unknown0, u32 unknown1,
+  // u32 width, u32 height, u32 dot_per_inch, u32 unknown2, u32 unknown3.
+  const page = Buffer.alloc(32);
+  page.writeUInt8(24, 0); // bpp
+  page.writeUInt8(1, 1); // colorspace: sRGB
+  page.writeUInt8(opts.duplex ?? 1, 2); // 1 = simplex
+  page.writeUInt8(opts.quality ?? 4, 3); // PQ4 = normal
+  page.writeUInt32BE(opts.mediaType ?? 0, 4); // "unknown0" (mediaType?)
+  page.writeUInt32BE(opts.inputSlot ?? 0, 8); // "unknown1" (inputSlot?)
+  page.writeUInt32BE(width, 12);
+  page.writeUInt32BE(height, 16);
+  page.writeUInt32BE(dpi, 20);
+  // unknown2 (24), unknown3 (28) stay 0
+
+  const chunks = [fileHeader, page];
+  const bpl = width * 3;
   let y = 0;
   while (y < height) {
     const line = rgb.subarray(y * bpl, (y + 1) * bpl);

@@ -6,7 +6,12 @@ import fastifyMultipart from '@fastify/multipart';
 import { config, printerUrl } from './config.js';
 import { getPrinterAttributes, getJobAttributes, printJob } from './ipp.js';
 import { renderForPrint, renderCalibration } from './render.js';
-import { encodePwg } from './pwg.js';
+import { encodePwg, encodeUrf } from './pwg.js';
+
+const RASTER = {
+  pwg: { mime: 'image/pwg-raster', encode: encodePwg },
+  urf: { mime: 'image/urf', encode: encodeUrf },
+};
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = Fastify({ logger: { level: process.env.LOG_LEVEL || 'info' } });
@@ -165,11 +170,12 @@ app.post('/api/print', async (req, reply) => {
         : { top: 30, bottom: 30, left: 44, right: 44 }, // 2.5 / 3.7 mm white frame
       padWhite: !borderless,
       icc: config.icc,
-      output: config.printFormat === 'pwg' ? 'raw' : 'jpeg',
+      output: RASTER[config.printFormat] ? 'raw' : 'jpeg',
     });
-    if (config.printFormat === 'pwg') {
-      const pwg = encodePwg(rendered.rgb, rendered.width, rendered.height);
-      await printBuffer(job, pwg, { copies, format: 'image/pwg-raster' });
+    const raster = RASTER[config.printFormat];
+    if (raster) {
+      const data = raster.encode(rendered.rgb, rendered.width, rendered.height);
+      await printBuffer(job, data, { copies, format: raster.mime });
     } else {
       await printBuffer(job, rendered, { copies, format: 'image/jpeg' });
     }
@@ -190,11 +196,12 @@ app.post('/api/calibrate', async () => {
   const job = enqueue(async (job) => {
     job.state = 'rendering';
     job.stateText = 'rendering calibration page…';
-    // Full-page ruler through the same 1:1 raster path as photos.
-    if (config.printFormat === 'pwg') {
+    // Full-page ruler through the same path as photos.
+    const raster = RASTER[config.printFormat];
+    if (raster) {
       const r = await renderCalibration(config.paper.page, 300, 'raw');
-      const pwg = encodePwg(r.rgb, r.width, r.height);
-      await printBuffer(job, pwg, { copies: 1, format: 'image/pwg-raster', jobName: 'calibration' });
+      const data = raster.encode(r.rgb, r.width, r.height);
+      await printBuffer(job, data, { copies: 1, format: raster.mime, jobName: 'calibration' });
     } else {
       const jpeg = await renderCalibration(config.paper.page);
       await printBuffer(job, jpeg, { copies: 1, format: 'image/jpeg', jobName: 'calibration' });
