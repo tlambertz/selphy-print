@@ -180,6 +180,7 @@ app.post('/api/print', async (req, reply) => {
         await cpnpPrint(host, jpeg, {
           width: config.paper.canonPage.h, // portrait after rotate
           height: config.paper.canonPage.w,
+          border: !borderless,
           onState: (s) => { job.stateText = 'printer: ' + s; },
         });
       }

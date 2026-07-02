@@ -32,6 +32,16 @@ const CODE = {
   executeSpoolPrint: 8,
 };
 
+// DataRequest values the printer reports in its status (little-endian @16)
+const REQ = {
+  NON: 0,
+  START_PRINT: 0x10000,
+  PRINT_DATA: 0x20000,
+  END_PRINT: 0x30000,
+  CANCEL_PRINT: 0x40000,
+  EXECUTE_SPOOL_PRINT: 0x70000,
+};
+
 const CP_POST_SIZE = 4; // printSize @14
 const BORDER_BORDERLESS = 2; // start-spool @18
 const MAX_CHUNK = 33792; // 0x8400, from SetMaxWriteSize
@@ -87,6 +97,25 @@ export async function discover(host) {
   const reply = await udpExchange(host, pkt, { expectOpcode: OP.deviceId });
   // device-ID string follows the 16-byte header
   return reply.subarray(16).toString('latin1').replace(/\0+$/, '');
+}
+
+// Poll the printer status over TCP (opcode 0x20 with sessionId). The reply
+// payload's byte 0x12 is the print "state" (selphy_go), and bytes 0x18/0x1c
+// carry the requested data offset/length; byte 0x08 is an error/cassette code.
+async function readStatus(conn, sessionId) {
+  const pkt = Buffer.from([67, 80, 78, 80, 1, 0x20, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+  setPacketId(pkt, nextPacketId());
+  setSession(pkt, sessionId);
+  await conn.write(pkt);
+  const { body } = await readFrame(conn);
+  const u32 = (o) => (o + 4 <= body.length ? body.readUInt32LE(o) : 0);
+  return {
+    state: body.length > 0x12 ? body[0x12] : -1,
+    statusCode: body.length > 8 ? body[8] : 0, // 0x0c = no cassette
+    offset: u32(0x18),
+    length: u32(0x1c),
+    raw: body,
+  };
 }
 
 // Returns { sessionId, tcpPort } — the printer allocates a per-session data
@@ -269,45 +298,101 @@ function makeSimple(code, { typePrint = 0 } = {}) {
  * @param {object} opts { width, height, typePrint, typeJpeg, onState }
  */
 export async function cpnpPrint(host, jpeg, opts = {}) {
-  const { width, height, onState = () => {}, dryRun = false } = opts;
-  const constants = { typePrint: opts.typePrint ?? 0, typeJpeg: opts.typeJpeg ?? 0 };
+  const { width = 1184, height = 1752, border = false, onState = () => {}, log = () => {} } = opts;
 
   onState('session');
   const { sessionId, tcpPort } = await sessionStart(host);
   onState('connecting');
-  const conn = await tcpConnect(host, tcpPort);
-  const results = {};
+  let conn = null;
+  for (let a = 0; a < 12 && !conn; a++) {
+    try { conn = await tcpConnect(host, tcpPort); } catch { await sleep(300); }
+  }
+  if (!conn) throw new Error('CPNP: printer did not open its data port');
+
   try {
     await negotiateMaxWriteSize(conn, sessionId);
+    const deadline = Date.now() + 180000;
+    let transferred = false;
+    let lastKey = '';
+    let sameCount = 0;
 
-    onState('spool');
-    // Per-image data: the transfer header (104B) + JPEG bytes is itself the
-    // command payload; writeData splits it into CPNP write frames.
-    results.startSpool = await writeData(conn, sessionId, makeStartSpool(jpeg.length, constants));
+    while (Date.now() < deadline) {
+      let st;
+      try { st = await readStatus(conn, sessionId); } catch { await sleep(150); continue; }
 
-    onState('data');
-    // Each PrintDataTransfer command is a 104-byte header (with this chunk's
-    // offset/size) + a JPEG partial that fits in one write frame. Do NOT let
-    // the frame splitter cut across the header — chunk at the app layer.
-    const CHUNK = MAX_CHUNK - 104;
-    for (let off = 0; off < jpeg.length; off += CHUNK) {
-      const part = jpeg.subarray(off, Math.min(off + CHUNK, jpeg.length));
-      const header = makeTransferHeader(part, off, jpeg.length, width, height, jpeg.length, constants);
-      results.data = await writeData(conn, sessionId, Buffer.concat([header, part]));
+      // Cassette / error at byte 8 (0x0c = no paper cassette).
+      if (st.statusCode === 0x0c) throw new Error('no paper cassette in printer');
+      if (st.statusCode && st.statusCode !== 0x01 && st.statusCode !== 0x0f) {
+        throw new Error('printer error 0x' + st.statusCode.toString(16));
+      }
+
+      const key = `${st.state}:${st.offset}:${st.length}`;
+      sameCount = key === lastKey ? sameCount + 1 : 0;
+      lastKey = key;
+
+      if (st.state === 0x01) {
+        onState('flags');
+        await writeData(conn, sessionId, makeFlags(border));
+      } else if (st.state === 0x02) {
+        onState('data');
+        const total = Math.min(st.length, jpeg.length - st.offset);
+        for (let done = 0; done < total; ) {
+          const n = Math.min(MAX_CHUNK - 104, total - done);
+          await writeData(conn, sessionId, makeChunk(jpeg, st.offset + done, n, width, height));
+          done += n;
+        }
+        if (st.offset === 0 && total >= jpeg.length - 16) transferred = true;
+        log(`sent off=${st.offset} len=${total}`);
+      } else if (st.state === 0x03) {
+        const done = Buffer.alloc(0x40);
+        done.writeUInt32LE(0x40, 0x04);
+        done[2] = 0x03;
+        await writeData(conn, sessionId, done).catch(() => {});
+        break;
+      } else if (st.state === 0x04) {
+        throw new Error('printer reported error state');
+      } else {
+        // idle/processing: once the whole image is in, the printer prints.
+        if (transferred && sameCount > 4) break;
+        await sleep(300);
+      }
     }
-
-    if (dryRun) {
-      onState('dry-run-complete');
-      return { sessionId, tcpPort, results, printed: false };
-    }
-
-    onState('execute');
-    results.execute = await writeData(conn, sessionId, makeSimple(CODE.executeSpoolPrint, constants));
-    results.end = await writeData(conn, sessionId, makeSimple(CODE.endPrint, constants));
+    onState('printing');
   } finally {
     conn.close();
     await sessionEnd(host, sessionId);
   }
   onState('done');
-  return { sessionId, tcpPort, results, printed: !dryRun };
+  return { printed: true };
+}
+
+// Job-flags packet (64B): length@4, marker@0x0c=1, border@0x12 (2=borderless,
+// 3=bordered). Sent in state 1.
+function makeFlags(border) {
+  const b = Buffer.alloc(0x40);
+  b.writeUInt32LE(0x40, 0x04);
+  b.writeUInt32LE(1, 0x0c);
+  b.writeUInt32LE(border ? 3 : 2, 0x12);
+  return b;
+}
+
+// One PrintDataTransfer: 104B header (partial offset/size + geometry) + JPEG
+// partial. Sent per state-2 data request.
+function makeChunk(jpeg, off, n, width, height) {
+  const h = Buffer.alloc(104);
+  h.writeUInt32LE(1, 0x02); // commandCode = printDataTransfer
+  h.writeUInt32LE(104 + n, 0x04);
+  h.writeUInt32LE(1, 0x0c);
+  h.writeUInt32LE(CP_POST_SIZE, 0x0e);
+  h.writeUInt32LE(1, 0x10);
+  h.writeUInt32LE(jpeg.length, 0x14);
+  h.writeUInt32LE(width, 0x18);
+  h.writeUInt32LE(height, 0x1c);
+  h.writeUInt32LE(off, 0x60);
+  h.writeUInt32LE(n, 0x64);
+  return Buffer.concat([h, jpeg.subarray(off, off + n)]);
+}
+
+function sleep(ms) {
+  return new Promise((r) => setTimeout(r, ms));
 }
