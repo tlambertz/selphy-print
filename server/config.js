@@ -45,9 +45,11 @@ const PAPERS = {
  * difference (~0.6 mm) is below the ±1 mm mechanical registration variance
  * units exhibit anyway (feed offset makes opposite ends differ by ~1–2 mm).
  *
- * Measurements (CP1000/CP1300/CP1500 community grids): sides 2.5–4.5 mm,
- * ends 4–6 mm. Defaults below cover the measured range; per-unit truth comes
- * from the calibration page (entered in the UI, or via env:
+ * These values are only meaningful for the print-scaling mode they were
+ * measured under ('fill', the default — see printScaling below). Theory for
+ * 'fill' (uniform enlargement onto the canvas): sides 3.3 mm, ends 4.9 mm
+ * per edge, ± the unit's feed offset. Per-unit truth comes from the
+ * calibration page (entered in the UI, or via env:
  * OVERSCAN_MM="top,bottom,left,right", or symmetric
  * OVERSCAN_SIDES_MM/OVERSCAN_ENDS_MM). */
 function parseOverscan() {
@@ -56,8 +58,8 @@ function parseOverscan() {
     if ([top, bottom, left, right].every(isFinite)) return { top, bottom, left, right };
     throw new Error('OVERSCAN_MM must be four numbers: "top,bottom,left,right"');
   }
-  const sides = parseFloat(env.OVERSCAN_SIDES_MM || '3.5');
-  const ends = parseFloat(env.OVERSCAN_ENDS_MM || '5.5');
+  const sides = parseFloat(env.OVERSCAN_SIDES_MM || '3.3');
+  const ends = parseFloat(env.OVERSCAN_ENDS_MM || '4.9');
   return { top: sides, bottom: sides, left: ends, right: ends };
 }
 const overscan = parseOverscan();
@@ -79,9 +81,14 @@ export const config = {
     quality: parseInt(env.JPEG_QUALITY || '95', 10),
   },
 
-  // 'none' + an exactly page-sized image = 1:1 placement, no printer-side
-  // scaling decisions. Override only for experiments.
-  printScaling: env.PRINT_SCALING || 'none',
+  // Empirically (measured on a real CP1500): 'none' places the raster 1:1
+  // centered on the head canvas — sides get shaved ~2.8 mm (canvas is wider
+  // than the paper) but the ends STOP at the tear-off perforations ± feed
+  // offset, leaving white bars: true borderless is impossible with 'none'.
+  // 'fill' engages the firmware's borderless enlargement (~7%), which the
+  // calibration/pre-compensation machinery models. Calibration pages are
+  // printed with the same mode, so measurements stay consistent.
+  printScaling: env.PRINT_SCALING || 'fill',
 
   maxUploadMb: parseInt(env.MAX_UPLOAD_MB || '64', 10),
 };

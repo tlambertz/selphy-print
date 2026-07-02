@@ -17,10 +17,20 @@ Android share sheet ──► PWA (crop UI, queue) ──► Node server ──�
   enlargement cannot be bypassed over IPP (custom media caps at 102×153 mm),
   so the outer few mm of any borderless print never land on paper.
 
+  Measured on a real CP1500 (not documented anywhere else, as far as we can
+  tell): the firmware's borderless enlargement is **tied to the
+  print-scaling mode**. With `print-scaling=none` the raster is placed 1:1
+  centered on the head canvas — the sides get shaved ~2.8 mm because the
+  canvas is wider than the paper, but the ends *stop at the tear-off
+  perforations* (± feed offset), leaving white bars: true borderless is
+  physically impossible in that mode. With `print-scaling=fill` (this app's
+  default) the firmware enlarges the page ~7% onto the canvas — full bleed
+  everywhere, at the cost of per-edge trim.
+
   This app removes every *other* source of cropping (images rendered at
-  exactly the page raster, submitted with `print-scaling=none` = 1:1 centered
-  placement per PWG 5100.16) and then **pre-compensates the enlargement
-  itself**: your crop is rendered into the calibrated surviving window of the
+  exactly the page raster, so `fill`'s aspect math is a clean uniform
+  enlargement with no additional crop) and then **pre-compensates the
+  enlargement itself**: your crop is rendered into the calibrated surviving window of the
   page and the doomed outer zone is filled with mirrored bleed. Net result:
   the frame you set in the crop UI is what lands on paper, edge to edge,
   within the printer's ~±1 mm mechanical feed tolerance (shown as a thin
