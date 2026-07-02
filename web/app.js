@@ -67,6 +67,51 @@ if ('serviceWorker' in navigator) {
   navigator.serviceWorker.register('sw.js');
 }
 
+/* ---------- "Add to home screen" ----------
+   Show an Install button only when the app is running in a browser tab (not
+   already installed). Chromium fires beforeinstallprompt and lets us trigger
+   the native prompt; iOS Safari never does, so there we show the manual
+   "Share → Add to Home Screen" steps. */
+(() => {
+  const btn = $('btn-install');
+  const standalone = () =>
+    window.matchMedia('(display-mode: standalone)').matches ||
+    window.navigator.standalone === true; // iOS
+  const isIOS =
+    /iph|ipod|ipad/i.test(navigator.userAgent) ||
+    (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1); // iPadOS
+  let deferred = null;
+
+  if (standalone()) return; // already installed — never show the button
+
+  window.addEventListener('beforeinstallprompt', (e) => {
+    e.preventDefault(); // keep the mini-infobar from auto-showing; use our button
+    deferred = e;
+    btn.hidden = false;
+  });
+  window.addEventListener('appinstalled', () => {
+    deferred = null;
+    btn.hidden = true;
+    toast('Installed — find Selphy Print on your home screen');
+  });
+
+  btn.addEventListener('click', async () => {
+    if (deferred) {
+      deferred.prompt();
+      const { outcome } = await deferred.userChoice;
+      deferred = null;
+      if (outcome === 'accepted') btn.hidden = true;
+    } else if (isIOS) {
+      toast("Tap the Share icon, then 'Add to Home Screen'");
+    } else {
+      toast('Use your browser menu → Install app / Add to Home screen');
+    }
+  });
+
+  // iOS gives no install event, so surface the button (with manual steps) up front.
+  if (isIOS) btn.hidden = false;
+})();
+
 try {
   new BroadcastChannel('selphy-share').onmessage = () => loadInbox();
 } catch {}
