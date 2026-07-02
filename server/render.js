@@ -85,8 +85,11 @@ export async function renderForPrint(input, opts) {
   let img = sharp(input, { failOn: 'truncated' }).rotate(); // EXIF auto-orient
   if (rotate) img = img.rotate(rotate);
 
-  // Resolve fractional crop against the oriented+rotated dimensions.
-  const buf = await img.toBuffer();
+  // Resolve fractional crop against the oriented+rotated dimensions. Materialize
+  // LOSSLESS (png) — sharp's toBuffer() matches the input format, so a JPEG
+  // upload would otherwise be silently re-encoded here at q80/4:2:0, feeding
+  // chroma-subsampled pixels into the crop/ICC path (visible as edge halos).
+  const buf = await img.png().toBuffer();
   const meta = await sharp(buf).metadata();
   const region = crop
     ? {
@@ -141,6 +144,7 @@ export async function renderForPrint(input, opts) {
       extendWith: opts.padWhite ? 'background' : 'mirror',
       background: '#ffffff',
     })
+    .png() // lossless intermediate (see above) — never a 4:2:0 JPEG re-encode
     .toBuffer();
   let portrait = sharp(page).rotate(90); // printer feeds portrait, short edge first
 
