@@ -335,14 +335,17 @@ export async function cpnpPrint(host, jpeg, opts = {}) {
         await writeData(conn, sessionId, makeFlags(border));
       } else if (st.state === 0x02) {
         onState('data');
-        const total = Math.min(st.length, jpeg.length - st.offset);
-        for (let done = 0; done < total; ) {
-          const n = Math.min(MAX_CHUNK - 104, total - done);
-          await writeData(conn, sessionId, makeChunk(jpeg, st.offset + done, n, width, height));
-          done += n;
-        }
-        if (st.offset === 0 && total >= jpeg.length - 16) transferred = true;
-        log(`sent off=${st.offset} len=${total}`);
+        // Serve get_chunk(offset,length) like selphy_go: ONE 104-byte header
+        // declaring the whole requested length, followed by that many bytes
+        // (zero-padded past EOF), streamed across frames by writeData.
+        const off = st.offset;
+        let length = st.length;
+        // sanitise a garbage/huge length request
+        if (!(length > 0) || length > jpeg.length) length = Math.max(0, jpeg.length - off);
+        await writeData(conn, sessionId, makeTransfer(jpeg, off, length, width, height));
+        if (off + length >= jpeg.length || off >= jpeg.length) transferred = true;
+        if (off >= jpeg.length && sameCount > 3) break; // done reading
+        log(`sent off=${off} len=${length}`);
       } else if (st.state === 0x03) {
         const done = Buffer.alloc(0x40);
         done.writeUInt32LE(0x40, 0x04);
@@ -376,21 +379,22 @@ function makeFlags(border) {
   return b;
 }
 
-// One PrintDataTransfer: 104B header (partial offset/size + geometry) + JPEG
-// partial. Sent per state-2 data request.
-function makeChunk(jpeg, off, n, width, height) {
-  const h = Buffer.alloc(104);
-  h.writeUInt32LE(1, 0x02); // commandCode = printDataTransfer
-  h.writeUInt32LE(104 + n, 0x04);
+// selphy_go get_chunk(offset,length): a single 0x68 (104) byte header
+// declaring the whole requested length, then `length` bytes of the file at
+// `offset` (zero-padded past EOF). writeData streams header+data over frames.
+function makeTransfer(jpeg, off, length, width, height) {
+  const h = Buffer.alloc(0x68);
+  h.writeUInt32LE(1, 0x02); // commandCode
+  h.writeUInt32LE(length + 0x68, 0x04); // total data size
   h.writeUInt32LE(1, 0x0c);
-  h.writeUInt32LE(CP_POST_SIZE, 0x0e);
-  h.writeUInt32LE(1, 0x10);
-  h.writeUInt32LE(jpeg.length, 0x14);
+  h.writeUInt32LE(jpeg.length, 0x14); // whole file size
   h.writeUInt32LE(width, 0x18);
   h.writeUInt32LE(height, 0x1c);
-  h.writeUInt32LE(off, 0x60);
-  h.writeUInt32LE(n, 0x64);
-  return Buffer.concat([h, jpeg.subarray(off, off + n)]);
+  h.writeUInt32LE(off, 0x60); // partial offset
+  h.writeUInt32LE(length, 0x64); // partial length (whole request)
+  const data = Buffer.alloc(length); // zero-padded
+  if (off < jpeg.length) jpeg.copy(data, 0, off, Math.min(off + length, jpeg.length));
+  return Buffer.concat([h, data]);
 }
 
 function sleep(ms) {
