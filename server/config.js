@@ -28,6 +28,9 @@ const PAPERS = {
     page: { w: 1748, h: 1181 },
     // full head canvas (Gutenprint print-dyesub.c) — diagnostic raster size
     canvas: { w: 1872, h: 1248 },
+    // Canon SELPHY Photo Layout renders postcard at ceil(mm * 11.835 px/mm)
+    // = 1752 x 1184 (landscape); pixel_per_mm from the app's printer_support.json
+    canonPage: { w: 1752, h: 1184 },
     // printable area in bordered mode (printer default margins:
     // 2.5 mm sides, 3.7 mm ends → 140.6×95.0 mm)
     printable: { w: 1661, h: 1122 },
