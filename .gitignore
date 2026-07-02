@@ -1,5 +1,7 @@
 node_modules/
 *.log
 result
+# archived prints (originals + rendered) — user data
+print-archive/
 # fetched via scripts/fetch-profile.sh — redistribution terms unclear
 profiles/*.icc

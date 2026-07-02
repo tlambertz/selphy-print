@@ -1,5 +1,7 @@
 /* Configuration via environment variables (12-factor, Nix/Docker friendly). */
 
+import path from 'node:path';
+
 const env = process.env;
 
 /* Postcard KP-108IN geometry, all landscape px @300dpi.
@@ -149,6 +151,16 @@ export const config = {
   printScaling: env.PRINT_SCALING || null, // ignored by CP1500; experiments only
 
   maxUploadMb: parseInt(env.MAX_UPLOAD_MB || '64', 10),
+
+  // Every print is archived here as two files: the untouched upload and the
+  // exact cropped/rendered image sent to the printer. Defaults to
+  // ./print-archive next to the working dir; set PRINT_ARCHIVE_DIR to relocate,
+  // or PRINT_ARCHIVE_DIR=off to disable. Disabled at runtime if the dir can't
+  // be created (e.g. read-only FS).
+  archiveDir:
+    env.PRINT_ARCHIVE_DIR === 'off'
+      ? null
+      : env.PRINT_ARCHIVE_DIR || path.join(process.cwd(), 'print-archive'),
 };
 
 export function printerUrl() {

@@ -1,4 +1,5 @@
 import path from 'node:path';
+import { mkdir, writeFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import Fastify from 'fastify';
 import sharp from 'sharp';
@@ -93,6 +94,43 @@ async function printBuffer(job, data, { copies = 1, format = 'image/jpeg', jobNa
     job.stateText = state === 5 ? 'printing…' : 'waiting for printer…';
   }
   throw new Error('timed out waiting for the printer to finish');
+}
+
+/* ---------- print archive ---------- */
+
+let archiveReady = null;
+function ensureArchiveDir() {
+  if (!config.archiveDir) return Promise.resolve(false);
+  if (!archiveReady) {
+    archiveReady = mkdir(config.archiveDir, { recursive: true })
+      .then(() => true)
+      .catch((err) => {
+        app.log.warn({ err, dir: config.archiveDir }, 'print archive dir unavailable — archiving disabled');
+        config.archiveDir = null;
+        return false;
+      });
+  }
+  return archiveReady;
+}
+const ARCHIVE_EXT = { jpeg: 'jpg', png: 'png', webp: 'webp', gif: 'gif', tiff: 'tiff', heif: 'heic', avif: 'avif' };
+function archiveStamp(id) {
+  const d = new Date();
+  const p = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}_job${id}`;
+}
+// Store both the untouched upload and the exact cropped image sent to the head.
+async function archivePrint(id, original, originalFmt, printJpeg) {
+  if (!(await ensureArchiveDir())) return;
+  const base = path.join(config.archiveDir, archiveStamp(id));
+  try {
+    await Promise.all([
+      writeFile(`${base}_original.${ARCHIVE_EXT[originalFmt] || 'img'}`, original),
+      writeFile(`${base}_print.jpg`, printJpeg),
+    ]);
+    app.log.info({ base }, 'archived print');
+  } catch (err) {
+    app.log.warn({ err }, 'print archive write failed');
+  }
 }
 
 /* ---------- API ---------- */
@@ -218,6 +256,7 @@ app.post('/api/print', async (req, reply) => {
   const plan = buildRenderPlan(options);
   const rotate = [0, 90, 180, 270].includes(options.rotate) ? options.rotate : 0;
   const crop = options.crop || null;
+  const originalFmt = (await sharp(imageBuf).metadata().catch(() => ({}))).format;
 
   const job = enqueue(async (job) => {
     job.state = 'rendering';
@@ -228,6 +267,7 @@ app.post('/api/print', async (req, reply) => {
       const jpeg = await renderForPrint(imageBuf, {
         crop, rotate, target: plan.target, bleed: plan.bleed, padWhite: plan.padWhite, icc, output: 'jpeg',
       });
+      await archivePrint(job.id, imageBuf, originalFmt, jpeg);
       const host = new URL(printerUrl()).hostname;
       for (let i = 0; i < copies; i++) {
         job.state = 'printing';
@@ -247,9 +287,14 @@ app.post('/api/print', async (req, reply) => {
     });
     if (plan.raster) {
       const r = RASTER[config.printFormat];
+      const archiveJpeg = await sharp(rendered.rgb, { raw: { width: rendered.width, height: rendered.height, channels: 3 } })
+        .jpeg({ quality: 95, chromaSubsampling: '4:4:4' })
+        .toBuffer();
+      await archivePrint(job.id, imageBuf, originalFmt, archiveJpeg);
       const data = r.encode(rendered.rgb, rendered.width, rendered.height);
       await printBuffer(job, data, { copies, format: r.mime });
     } else {
+      await archivePrint(job.id, imageBuf, originalFmt, rendered);
       await printBuffer(job, rendered, { copies, format: 'image/jpeg' });
     }
   });
@@ -401,6 +446,7 @@ app.listen({ port: config.port, host: config.host }).then(() => {
       printer: printerUrl() || '(unset — set PRINTER_HOST)',
       icc: config.icc.profile || '(none — set ICC_PROFILE)',
       paper: config.paper.name,
+      archive: config.archiveDir || '(off)',
     },
     'selphy-print up'
   );
