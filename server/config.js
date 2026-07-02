@@ -24,12 +24,28 @@ const PAPERS = {
     name: 'Postcard 100×148 mm (KP-108IN)',
     // physical page in mm (landscape: w = 148 ends-dimension, h = 100 sides)
     mm: { w: 148, h: 100 },
+    // The physical KP-108IN sheet is 100×178 mm: a 15 mm tear-off stub
+    // beyond a perforation at EACH END (left/right in landscape). There are
+    // no stubs on the 100 mm sides — bleed there just runs off the paper.
+    // The print head window covers the photo area plus a few mm into the
+    // stubs, so the stubs are never fully inked; they exist to be torn off.
+    sheet: { mm: { w: 178, h: 100 }, stubMm: 15 },
     // IPP page raster @300dpi — the render target for borderless
     page: { w: 1748, h: 1181 },
-    // full head canvas (Gutenprint print-dyesub.c) — diagnostic raster size
+    // Full head canvas (Gutenprint print-dyesub.c). MEASURED on hardware
+    // (2026-07-02, CPNP calibration prints): the CP1500 firmware
+    // aspect-FILL-scales any CPNP JPEG onto this canvas and centers it on
+    // the physical sheet (a 1232×1800 test printed its 50 mm bars at 52 mm
+    // = 1872/1800 exactly). Sending exactly this size ⇒ scale 1.0, fully
+    // deterministic geometry. This is the CPNP render target.
     canvas: { w: 1872, h: 1248 },
+    // Paper (100×148 mm) centered on the canvas at 11.835 px/mm: the canvas
+    // extends past the paper by these px per edge — structural bleed that is
+    // ALWAYS trimmed (ends = 148 mm edges, sides = 100 mm edges).
+    canvasBleed: { ends: 60, sides: 32 },
     // Canon SELPHY Photo Layout renders postcard at ceil(mm * 11.835 px/mm)
-    // = 1752 x 1184 (landscape); pixel_per_mm from the app's printer_support.json
+    // = 1752 x 1184 (landscape); pixel_per_mm from the app's printer_support.json.
+    // (The firmware then scales that by 1872/1752 ≈ 1.0685 onto the canvas.)
     canonPage: { w: 1752, h: 1184 },
     // printable area in bordered mode (printer default margins:
     // 2.5 mm sides, 3.7 mm ends → 140.6×95.0 mm)
@@ -63,11 +79,32 @@ function parseOverscan() {
     if ([top, bottom, left, right].every(isFinite)) return { top, bottom, left, right };
     throw new Error('OVERSCAN_MM must be four numbers: "top,bottom,left,right"');
   }
-  const sides = parseFloat(env.OVERSCAN_SIDES_MM || '1.0');
-  const ends = parseFloat(env.OVERSCAN_ENDS_MM || '1.0');
-  return { top: sides, bottom: sides, left: ends, right: ends };
+  // Measured on the reference CP1500 (calibration sheet, 2026-07-02):
+  // top/bottom land exactly on the paper edge; the left mapping overshoots
+  // its perforation by 0.5 mm (negative = window extends past the photo
+  // boundary), the right falls 1 mm short of its perforation.
+  return { top: 0, bottom: 0, left: -0.5, right: 1 };
 }
 const overscan = parseOverscan();
+
+// Width of the blue overscan band that ends up visible on each END of the
+// calibration sheet, in mm — literally "how many mm wide is the blue strip on
+// that edge." (The blue zone is the structural canvas overhang; how much of it
+// lands on the paper before running onto the tear-off stub is what you read.)
+// Drives the editor's "prints past the tear line" visualization. Ends only
+// (left/right): the 100 mm sides have no stub, so their blue runs straight off
+// the paper (~0 mm visible) and needs no calibration.
+function parseBlueWidth() {
+  if (env.BLUE_MM) {
+    const [left, right] = env.BLUE_MM.split(',').map(Number);
+    if ([left, right].every(isFinite)) return { left, right };
+    throw new Error('BLUE_MM must be two numbers: "left,right"');
+  }
+  // measured on the reference CP1500 (calibration sheet, 2026-07-02):
+  // ~2 mm of blue visible on each end.
+  return { left: 2, right: 2 };
+}
+const blueWidth = parseBlueWidth();
 
 export const config = {
   port: parseInt(env.PORT || '8080', 10),
@@ -79,6 +116,7 @@ export const config = {
 
   paper: PAPERS[env.PAPER || 'postcard'],
   overscan,
+  blueWidth,
 
   icc: {
     profile: env.ICC_PROFILE || null, // absolute path to .icc, empty = no color management
@@ -86,20 +124,26 @@ export const config = {
     quality: parseInt(env.JPEG_QUALITY || '95', 10),
   },
 
-  /* Transport, learned the hard way on real hardware:
-   * - JPEG jobs are a firmware black box: print-scaling is ignored (absent
-   *   from job-creation-attributes-supported), placement is 1:1-ish with
-   *   white bars at the ends regardless of image size or media-col.
-   * - PWG raster ('pwg', default) is the driver/AirPrint-class path. With
-   *   the PLAIN media keyword the firmware prints the full-page raster 1:1
-   *   with no borderless enlargement (the "select the non-borderless paper
-   *   variant" recipe) — deterministic geometry, residuals calibratable.
-   * - mediaVariant 'borderless' (zero-margin media-col) instead engages the
-   *   firmware enlargement — only useful for experiments. */
-  // 'cpnp' = Canon's own protocol (the only true full-bleed path — sends
-  // JPEG with the borderless spool flag). 'urf'/'pwg'/'jpeg' = IPP fallbacks.
-  printFormat: env.PRINT_FORMAT || 'cpnp',
-  mediaVariant: env.MEDIA_VARIANT || 'plain', // 'plain' | 'borderless'
+  /* Transport, learned the hard way on real hardware (and re-learned twice:
+   * measure ink against the PERFORATIONS, and the two JPEG paths differ):
+   * - 'jpeg' (DEFAULT): plain IPP Print-Job with image/jpeg. The firmware
+   *   aspect-FITS the image onto the paper/page area, centered, NO canvas
+   *   overscan (measured: canvas padding printed as visible inset borders).
+   *   Render at the page with only the registration bleed → edge-to-edge
+   *   within ±1 mm feed tolerance.
+   * - 'cpnp' = Canon's own protocol. The firmware aspect-FILL-scales onto
+   *   the full 1248×1872 head canvas (ink a few mm past the tear lines —
+   *   true overscan borderless). Render at the canvas, scale 1.0. Extras:
+   *   per-pass progress, decoded errors, paper-out pause/resume.
+   * - 'urf'/'pwg' raster paths: URF prints bordered, PWG is rejected —
+   *   experiments only. */
+  printFormat: env.PRINT_FORMAT || 'jpeg',
+  // 'borderless' (default): zero-margin media-col — the firmware maps the
+  // JPEG onto its overscan rect, so renders are canvas-size with structural
+  // bleed (true full bleed; feed offset buried in overscan, like CPNP).
+  // 'plain': media keyword — image fits the bare paper rect 1:1; a ±1 mm
+  // feed shift leaves a white sliver no image content can cover.
+  mediaVariant: env.MEDIA_VARIANT || 'borderless',
   printScaling: env.PRINT_SCALING || null, // ignored by CP1500; experiments only
 
   maxUploadMb: parseInt(env.MAX_UPLOAD_MB || '64', 10),

@@ -1,6 +1,12 @@
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import Fastify from 'fastify';
+import sharp from 'sharp';
+
+// The print head's native grid: 11.835 px/mm (≈300.6 dpi) — JPEG-path
+// renders and their calibration rulers live on it; raster formats declare
+// plain 300 dpi in their headers and keep that grid.
+const DEVICE_DPI = 11.835 * 25.4;
 import fastifyStatic from '@fastify/static';
 import fastifyMultipart from '@fastify/multipart';
 import { config, printerUrl } from './config.js';
@@ -94,6 +100,12 @@ async function printBuffer(job, data, { copies = 1, format = 'image/jpeg', jobNa
 app.get('/api/config', async () => ({
   paper: config.paper,
   overscan: config.overscan,
+  // geometry differs per transport: overscanning modes (cpnp; ipp jpeg with
+  // the borderless variant) put ink past the tear line, plain ipp jpeg ends
+  // ≈ at it — the editor visualization adapts.
+  printFormat: config.printFormat,
+  mediaVariant: config.mediaVariant,
+  blueWidth: config.blueWidth,
   icc: { enabled: !!config.icc.profile, intent: config.icc.intent },
   printerConfigured: !!printerUrl(),
 }));
@@ -145,29 +157,51 @@ app.post('/api/print', async (req, reply) => {
   const overscanMm = {};
   for (const edge of ['top', 'bottom', 'left', 'right']) {
     const v = Number(options.overscan?.[edge]);
-    overscanMm[edge] = isFinite(v) && v >= 0 && v <= 12 ? v : config.overscan[edge];
+    // negative = the mapping overshoots the paper boundary on that edge
+    // (the structural canvas bleed absorbs it, so total bleed stays ≥ 0)
+    overscanMm[edge] = isFinite(v) && v >= -5 && v <= 12 ? v : config.overscan[edge];
   }
-  const PX_PER_MM = 300 / 25.4;
-  const bleed = {
-    top: Math.round(overscanMm.top * PX_PER_MM),
-    bottom: Math.round(overscanMm.bottom * PX_PER_MM),
-    left: Math.round(overscanMm.left * PX_PER_MM),
-    right: Math.round(overscanMm.right * PX_PER_MM),
-  };
+  // mm → px at the render target's resolution: JPEG targets (canonPage,
+  // canvas) live on the device grid (11.835 px/mm); raster targets on the
+  // IPP-standard 300 dpi grid.
+  const bleedPx = (pxPerMm) => ({
+    top: Math.round(overscanMm.top * pxPerMm),
+    bottom: Math.round(overscanMm.bottom * pxPerMm),
+    left: Math.round(overscanMm.left * pxPerMm),
+    right: Math.round(overscanMm.right * pxPerMm),
+  });
+  const bleed = bleedPx(RASTER[config.printFormat] ? 300 / 25.4 : 11.835);
 
   const job = enqueue(async (job) => {
     job.state = 'rendering';
     job.stateText = 'processing image…';
 
     if (config.printFormat === 'cpnp') {
-      // Canon's own path: JPEG at the app's render size (1752×1184 → portrait
-      // 1184×1752), borderless flag in the spool header does the full bleed.
-      // The firmware overscans, so pre-compensate with the calibrated bleed.
+      // Canon's own path. Measured firmware behavior: any JPEG is aspect-fill
+      // scaled onto the full head canvas (1872×1248) and centered on the
+      // sheet, so we render AT the canvas (scale 1.0) with the photo composed
+      // for the centered paper window. Bleed per edge = structural canvas
+      // overhang (always trimmed) + calibrated registration. Like Canon's
+      // app we always print with the borderless spool flag — a "bordered"
+      // print is a white frame baked into the image.
+      const cv = config.paper.canvas;
+      const structural = config.paper.canvasBleed; // landscape: ends=left/right
+      const cpnpBleed = {
+        top: structural.sides + bleed.top,
+        bottom: structural.sides + bleed.bottom,
+        left: structural.ends + bleed.left,
+        right: structural.ends + bleed.right,
+      };
+      if (!borderless) {
+        // classic SELPHY bordered look: ~2.5 mm sides / 3.7 mm ends of white
+        cpnpBleed.top += 30; cpnpBleed.bottom += 30;
+        cpnpBleed.left += 44; cpnpBleed.right += 44;
+      }
       const jpeg = await renderForPrint(imageBuf, {
         crop: options.crop || null,
         rotate: [0, 90, 180, 270].includes(options.rotate) ? options.rotate : 0,
-        target: config.paper.canonPage,
-        bleed: borderless ? bleed : { top: 30, bottom: 30, left: 44, right: 44 },
+        target: cv,
+        bleed: cpnpBleed,
         padWhite: !borderless,
         icc: config.icc,
         output: 'jpeg',
@@ -178,26 +212,55 @@ app.post('/api/print', async (req, reply) => {
         job.state = 'printing';
         job.stateText = copies > 1 ? `printing ${i + 1}/${copies}…` : 'printing…';
         await cpnpPrint(host, jpeg, {
-          width: config.paper.canonPage.h, // portrait after rotate
-          height: config.paper.canonPage.w,
-          border: !borderless,
+          width: cv.h, // portrait after rotate
+          height: cv.w,
           onState: (s) => { job.stateText = 'printer: ' + s; },
         });
       }
       return;
     }
 
-    // IPP fallbacks (raster / jpeg) — kept for experimentation.
+    // IPP fallbacks. The JPEG path aspect-fits the image BY PIXELS (DPI
+    // metadata ignored) onto a firmware rect that depends on the media
+    // variant: with PLAIN media it's the paper rect (canonPage in device px
+    // — measured: canvas padding printed as inset borders), with the
+    // zero-margin borderless media-col it should be the head canvas, like
+    // URF's enlargement — so we render canvas-size with the same overscan
+    // composition as CPNP and the fit scale stays 1.0. The calibration page
+    // goes through this exact geometry and verifies it. Raster formats keep
+    // the 300 dpi page geometry their headers declare.
+    const raster = RASTER[config.printFormat];
+    const overscans = !raster && config.mediaVariant === 'borderless';
+    let target, ippBleed;
+    if (raster) {
+      target = config.paper.page;
+      ippBleed = borderless ? bleed : { top: 30, bottom: 30, left: 44, right: 44 };
+    } else if (overscans) {
+      const st = config.paper.canvasBleed;
+      target = config.paper.canvas;
+      ippBleed = {
+        top: st.sides + bleed.top,
+        bottom: st.sides + bleed.bottom,
+        left: st.ends + bleed.left,
+        right: st.ends + bleed.right,
+      };
+      if (!borderless) {
+        ippBleed.top += 30; ippBleed.bottom += 30;
+        ippBleed.left += 44; ippBleed.right += 44;
+      }
+    } else {
+      target = config.paper.canonPage;
+      ippBleed = borderless ? bleed : { top: 30, bottom: 30, left: 44, right: 44 };
+    }
     const rendered = await renderForPrint(imageBuf, {
       crop: options.crop || null,
       rotate: [0, 90, 180, 270].includes(options.rotate) ? options.rotate : 0,
-      target: config.paper.page,
-      bleed: borderless ? bleed : { top: 30, bottom: 30, left: 44, right: 44 },
+      target,
+      bleed: ippBleed,
       padWhite: !borderless,
       icc: config.icc,
-      output: RASTER[config.printFormat] ? 'raw' : 'jpeg',
+      output: raster ? 'raw' : 'jpeg',
     });
-    const raster = RASTER[config.printFormat];
     if (raster) {
       const data = raster.encode(rendered.rgb, rendered.width, rendered.height);
       await printBuffer(job, data, { copies, format: raster.mime });
@@ -217,19 +280,45 @@ app.get('/api/jobs/:id', async (req, reply) => {
 
 // Prints a page of mm rulers so the true visible area / overscan can be
 // measured with the exact same render+IPP path as real prints.
+// The calibration page always mirrors the photo path exactly (same target,
+// same media variant, only without the calibrated pre-compensation), so its
+// rulers measure the real print geometry. Overscanning modes (cpnp always;
+// ipp jpeg with the borderless variant) pad the paper-window rulers out to
+// the head canvas; plain ipp jpeg prints the bare paper rect.
+function calibrationJpeg() {
+  const overscans =
+    config.printFormat === 'cpnp' ||
+    (!RASTER[config.printFormat] && config.mediaVariant === 'borderless');
+  return renderCalibration(
+    config.paper.canonPage, DEVICE_DPI, 'jpeg',
+    overscans ? config.paper.canvasBleed : null
+  );
+}
+
+// The exact image the calibrate button prints, for on-screen preview
+// (rotated back to landscape so it displays the way you hold the sheet).
+app.get('/api/calibrate/preview', async (req, reply) => {
+  const jpeg = RASTER[config.printFormat]
+    ? await renderCalibration(config.paper.page)
+    : await calibrationJpeg();
+  const landscape = await sharp(jpeg).rotate(270).jpeg({ quality: 90 }).toBuffer();
+  reply.header('cache-control', 'no-store');
+  reply.type('image/jpeg');
+  return landscape;
+});
+
 app.post('/api/calibrate', async () => {
   const job = enqueue(async (job) => {
     job.state = 'rendering';
     job.stateText = 'rendering calibration page…';
-    // Full-page ruler through the same path as photos.
     if (config.printFormat === 'cpnp') {
-      const jpeg = await renderCalibration(config.paper.canonPage);
+      const jpeg = await calibrationJpeg();
       const host = new URL(printerUrl()).hostname;
       job.state = 'printing';
       job.stateText = 'printing…';
       await cpnpPrint(host, jpeg, {
-        width: config.paper.canonPage.h,
-        height: config.paper.canonPage.w,
+        width: config.paper.canvas.h,
+        height: config.paper.canvas.w,
         onState: (s) => { job.stateText = 'printer: ' + s; },
       });
       return;
@@ -240,8 +329,7 @@ app.post('/api/calibrate', async () => {
       const data = raster.encode(r.rgb, r.width, r.height);
       await printBuffer(job, data, { copies: 1, format: raster.mime, jobName: 'calibration' });
     } else {
-      const jpeg = await renderCalibration(config.paper.page);
-      await printBuffer(job, jpeg, { copies: 1, format: 'image/jpeg', jobName: 'calibration' });
+      await printBuffer(job, await calibrationJpeg(), { copies: 1, format: 'image/jpeg', jobName: 'calibration' });
     }
   });
   return { jobId: job.id };
