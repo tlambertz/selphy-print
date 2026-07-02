@@ -93,11 +93,6 @@
       <button id="btn-clear" class="btn icon-btn" title="Clear queue" aria-label="Clear queue">
         <svg viewBox="0 0 24 24"><path d="M4 7h16M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2m-9 0 1 13a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1l1-13" /></svg>
       </button>
-      <label class="switch" title="Print with a white frame (nothing trimmed) instead of edge-to-edge">
-        <input type="checkbox" id="opt-border" />
-        <span class="track"><span class="thumb"></span></span>
-        <span class="switch-label">White border</span>
-      </label>
       <button id="btn-print" class="btn primary grow">Print all</button>
     </div>
   </footer>
@@ -145,6 +140,7 @@
         <button id="ed-fill-max" class="btn chip" title="Zoom so the photo fills the paper exactly — keeps the most of the photo. Edges land within ±1 mm of the paper edge as the feed varies.">Max fill</button>
         <button id="ed-fill-bleed" class="btn chip" title="Zoom in a hair so the photo bleeds ~1 mm past every edge — guaranteed borderless with real image (no white slivers or mirrored edges).">+1 mm bleed</button>
       </div>
+      <button id="ed-border" class="btn chip" aria-pressed="false" title="Print this photo with a white border instead of edge-to-edge">White border</button>
       <div class="copies">
         <button id="ed-copies-minus" class="btn icon-btn small" aria-label="Fewer copies">
           <svg viewBox="0 0 24 24"><path d="M5 12h14" /></svg>

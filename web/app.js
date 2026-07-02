@@ -243,6 +243,7 @@ async function loadInbox() {
       crop: null, // default: centered cover crop, computed on first edit/print
       rotate: 0,
       copies: 1,
+      border: false, // per-image white border (else edge-to-edge)
       state: 'ready',
     });
     addedIds.push(rec.id);
@@ -265,9 +266,14 @@ function render() {
   for (const item of items) {
     const card = document.createElement('div');
     card.className = 'card';
-    const img = document.createElement('img');
-    img.src = item.url;
-    card.appendChild(img);
+    // Thumbnail shows exactly what prints: the crop, rotation and (if set) the
+    // white border — not the raw upload.
+    const canvas = document.createElement('canvas');
+    canvas.width = 592;
+    canvas.height = 400; // 592/400 = 1.48 = postcard page aspect
+    canvas.className = 'card-canvas';
+    card.appendChild(canvas);
+    paintThumb(canvas, item);
 
     if (item.copies > 1) {
       const badge = document.createElement('span');
@@ -284,6 +290,7 @@ function render() {
       if (printing) return;
       await inboxDelete([item.id]);
       URL.revokeObjectURL(item.url);
+      item._bmp?.close?.();
       queue.delete(item.id);
       render();
     });
@@ -304,6 +311,41 @@ function render() {
   $('btn-print').textContent = n <= 1 ? 'Print' : `Print all (${n})`;
 }
 
+// Paint a card thumbnail = the paper (page aspect) showing the item's crop,
+// rotation and white-border setting — i.e. what the print will look like.
+// Mirrors the editor's draw() mapping (crop window → the photo rect).
+async function paintThumb(canvas, item) {
+  const bmp = item._bmp || (item._bmp = await createImageBitmap(item.blob));
+  const ctx = canvas.getContext('2d');
+  const cw = canvas.width, ch = canvas.height;
+  const a = paperAspect();
+  const rot = item.rotate || 0;
+  const rw = rot % 180 === 0 ? bmp.width : bmp.height;
+  const rh = rot % 180 === 0 ? bmp.height : bmp.width;
+  // crop window in rotated-image px (fall back to centered cover)
+  let sw, sh, cx, cy;
+  if (item.crop) { sw = item.crop.scale; sh = sw / a; cx = item.crop.cx; cy = item.crop.cy; }
+  else { sw = Math.min(rw, rh * a); sh = sw / a; cx = rw / 2; cy = rh / 2; }
+
+  ctx.clearRect(0, 0, cw, ch);
+  // White border ≈ 2.5 mm/100 = 3.7 mm/148 ⇒ a uniform ~2.5% inset each edge.
+  const ins = item.border ? 0.025 : 0;
+  if (item.border) { ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, cw, ch); }
+  const dx = ins * cw, dy = ins * ch, dw = cw - 2 * dx, dh = ch - 2 * dy;
+
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(dx, dy, dw, dh);
+  ctx.clip();
+  const scale = dw / sw; // dest px per rotated-image px
+  ctx.translate(dx - (cx - sw / 2) * scale, dy - (cy - sh / 2) * scale);
+  ctx.scale(scale, scale);
+  ctx.translate(rw / 2, rh / 2);
+  ctx.rotate((rot * Math.PI) / 180);
+  ctx.drawImage(bmp, -bmp.width / 2, -bmp.height / 2);
+  ctx.restore();
+}
+
 /* ---------- crop editor ---------- */
 
 const editor = $('editor');
@@ -322,9 +364,11 @@ async function openEditor(item) {
     bitmap,
     rotate: item.rotate,
     copies: item.copies,
+    border: !!item.border,
     crop: item.crop ? { ...item.crop } : null,
   };
   editor.hidden = false;
+  syncBorderBtn();
   layoutEditor();
   if (!ed.crop) ed.crop = defaultCrop();
   clampCrop();
@@ -529,6 +573,17 @@ function fillWithBleed(marginMm) {
 }
 $('ed-fill-max').addEventListener('click', () => fillWithBleed(0));
 $('ed-fill-bleed').addEventListener('click', () => fillWithBleed(1));
+
+function syncBorderBtn() {
+  const b = $('ed-border');
+  b.setAttribute('aria-pressed', ed.border ? 'true' : 'false');
+  b.classList.toggle('active', ed.border);
+}
+$('ed-border').addEventListener('click', () => {
+  ed.border = !ed.border;
+  syncBorderBtn();
+  draw();
+});
 $('ed-copies-minus').addEventListener('click', () => {
   ed.copies = Math.max(1, ed.copies - 1);
   $('ed-copies').textContent = ed.copies + '×';
@@ -563,7 +618,7 @@ async function showPreview() {
     form.append('options', JSON.stringify({
       crop: currentCropRect(),
       rotate: ed.rotate,
-      border: $('opt-border').checked,
+      border: ed.border,
       overscan: effectiveOverscan(),
       icc: iccEnabled(),
     }));
@@ -592,6 +647,7 @@ $('ed-done').addEventListener('click', () => {
   ed.item.crop = { ...ed.crop };
   ed.item.rotate = ed.rotate;
   ed.item.copies = ed.copies;
+  ed.item.border = ed.border;
   closeEditor();
   render();
 });
@@ -609,7 +665,6 @@ async function printAll() {
   printing = true;
   $('btn-print').disabled = true;
 
-  const border = $('opt-border').checked;
   let failed = 0;
 
   for (const item of queue.values()) {
@@ -627,7 +682,7 @@ async function printAll() {
           crop,
           rotate: item.rotate,
           copies: item.copies,
-          border,
+          border: !!item.border,
           // per-device calibration → the server pre-compensates the render
           overscan: effectiveOverscan(),
           icc: iccEnabled(),
