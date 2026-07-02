@@ -286,8 +286,15 @@ export async function cpnpPrint(host, jpeg, opts = {}) {
     results.startSpool = await writeData(conn, sessionId, makeStartSpool(jpeg.length, constants));
 
     onState('data');
-    const header = makeTransferHeader(jpeg, 0, jpeg.length, width, height, jpeg.length, constants);
-    results.data = await writeData(conn, sessionId, Buffer.concat([header, jpeg]));
+    // Each PrintDataTransfer command is a 104-byte header (with this chunk's
+    // offset/size) + a JPEG partial that fits in one write frame. Do NOT let
+    // the frame splitter cut across the header — chunk at the app layer.
+    const CHUNK = MAX_CHUNK - 104;
+    for (let off = 0; off < jpeg.length; off += CHUNK) {
+      const part = jpeg.subarray(off, Math.min(off + CHUNK, jpeg.length));
+      const header = makeTransferHeader(part, off, jpeg.length, width, height, jpeg.length, constants);
+      results.data = await writeData(conn, sessionId, Buffer.concat([header, part]));
+    }
 
     if (dryRun) {
       onState('dry-run-complete');
