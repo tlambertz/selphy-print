@@ -35,6 +35,24 @@ export async function inboxAdd(files) {
   return ids;
 }
 
+// Merge edit settings (crop/rotate/copies/border) into a stored record so they
+// survive a page refresh. No-op if the record is gone.
+export async function inboxUpdate(id, patch) {
+  const db = await openDb();
+  await new Promise((resolve, reject) => {
+    const tx = db.transaction(STORE, 'readwrite');
+    const store = tx.objectStore(STORE);
+    const get = store.get(id);
+    get.onsuccess = () => {
+      const rec = get.result;
+      if (rec) store.put({ ...rec, ...patch });
+    };
+    tx.oncomplete = resolve;
+    tx.onerror = () => reject(tx.error);
+  });
+  db.close();
+}
+
 export async function inboxAll() {
   const db = await openDb();
   const items = await new Promise((resolve, reject) => {

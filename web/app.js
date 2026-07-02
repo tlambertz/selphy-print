@@ -1,6 +1,6 @@
 // All URLs in this app are relative so it works at any mount point
 // (reverse-proxy root, path-prefix dev proxies, etc.).
-import { inboxAdd, inboxAll, inboxDelete } from './db.js';
+import { inboxAdd, inboxAll, inboxDelete, inboxUpdate } from './db.js';
 
 /* ---------- state ---------- */
 
@@ -257,10 +257,11 @@ async function loadInbox() {
       id: rec.id,
       blob: rec.blob,
       url: URL.createObjectURL(rec.blob),
-      crop: null, // default: centered cover crop, computed on first edit/print
-      rotate: 0,
-      copies: 1,
-      border: false, // per-image white border (else edge-to-edge)
+      // Edit settings persisted per record (survive refresh); defaults if unset.
+      crop: rec.crop || null, // {cx,cy,scale} or null = centered cover crop
+      rotate: rec.rotate || 0,
+      copies: rec.copies || 1,
+      border: !!rec.border, // per-image white border (else edge-to-edge)
       state: 'ready',
     });
     addedIds.push(rec.id);
@@ -665,6 +666,10 @@ $('ed-done').addEventListener('click', () => {
   ed.item.rotate = ed.rotate;
   ed.item.copies = ed.copies;
   ed.item.border = ed.border;
+  // Persist so crop/orientation/copies/border survive a page refresh.
+  inboxUpdate(ed.item.id, {
+    crop: ed.item.crop, rotate: ed.item.rotate, copies: ed.item.copies, border: ed.item.border,
+  });
   closeEditor();
   render();
 });
