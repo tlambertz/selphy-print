@@ -134,6 +134,10 @@
       <button id="ed-rotate" class="btn icon-btn" title="Rotate 90°" aria-label="Rotate">
         <svg viewBox="0 0 24 24"><path d="M20 11a8 8 0 1 0-2.34 5.66M20 5v6h-6" /></svg>
       </button>
+      <div class="fill-presets" role="group" aria-label="Fill the paper">
+        <button id="ed-fill-max" class="btn chip" title="Zoom so the photo fills the paper exactly — keeps the most of the photo. Edges land within ±1 mm of the paper edge as the feed varies.">Max fill</button>
+        <button id="ed-fill-bleed" class="btn chip" title="Zoom in a hair so the photo bleeds ~1 mm past every edge — guaranteed borderless with real image (no white slivers or mirrored edges).">+1 mm bleed</button>
+      </div>
       <div class="copies">
         <button id="ed-copies-minus" class="btn icon-btn small" aria-label="Fewer copies">
           <svg viewBox="0 0 24 24"><path d="M5 12h14" /></svg>
@@ -144,7 +148,7 @@
         </button>
       </div>
     </div>
-    <p id="editor-hint">Drag to move · pinch to zoom · frame = your photo after tearing. The half-dimmed strips print past the tear line (torn off with the stubs); everything darker never reaches paper. The tear/edge lands inside the dashed band.</p>
+    <p id="editor-hint">Drag to move · pinch to zoom · <b>Max fill</b> = most photo, edges flush · <b>+1 mm bleed</b> = safe borderless · frame = your photo after tearing. The half-dimmed strips print past the tear line (torn off with the stubs); everything darker never reaches paper. The tear/edge lands inside the dashed band.</p>
   </div>
 
   <!-- Printer / calibration sheet -->

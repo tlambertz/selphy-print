@@ -449,6 +449,25 @@ $('ed-rotate').addEventListener('click', () => {
   ed.crop = defaultCrop();
   draw();
 });
+
+// Fill presets: set the zoom so the photo fills the paper with a chosen bleed
+// margin — mm of REAL image content pushed past every paper edge. 0 = cover
+// crop, edges flush (the most photo kept); >0 zooms in just enough that the
+// crop is inset from the image by that margin, so the printer bleeds genuine
+// image (not a mirror/white sliver) under the ±1 mm feed drift. maxW is the
+// cover-crop scale; magnifying by (shortHalf+m)/shortHalf overflows the short
+// paper edge by exactly m mm (the long edge gets proportionally more), so
+// every side clears m mm. Framing center is preserved.
+function fillWithBleed(marginMm) {
+  const img = rotatedSize();
+  const maxW = Math.min(img.w, img.h * paperAspect()); // cover-crop scale
+  const shortHalf = Math.min(paper.mm.w, paper.mm.h) / 2; // 50 mm on postcard
+  ed.crop.scale = maxW * (shortHalf / (shortHalf + marginMm));
+  clampCrop();
+  draw();
+}
+$('ed-fill-max').addEventListener('click', () => fillWithBleed(0));
+$('ed-fill-bleed').addEventListener('click', () => fillWithBleed(1));
 $('ed-copies-minus').addEventListener('click', () => {
   ed.copies = Math.max(1, ed.copies - 1);
   $('ed-copies').textContent = ed.copies + '×';
