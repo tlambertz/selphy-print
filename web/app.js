@@ -336,15 +336,17 @@ function layoutEditor() {
   const mmX = fw / paper.mm.w;
   const mmY = fh / paper.mm.h;
   const stubW = stubFrac * fw;
-  // How far ink prints past the tear line onto the stub: the blue region
-  // width (mm of blue past the nominal edge) minus where the tear line sits
-  // (calibration value, mm inward — may be negative). Plain media has no
+  // How far ink prints past the tear line onto the stub. On one axis (mm
+  // inward from the nominal edge, blue is negative): the tear line sits at
+  // `overscan`, ink stops at `-blueWidth`, so the inked strip past the tear
+  // = overscan - (-blueWidth) = blueWidth + overscan. (overscan may be
+  // negative when the tear line falls in the blue.) Plain media has no
   // overscan; only the ~registration overlap remains.
   const ov = effectiveOverscan();
   const bw = effectiveBlueWidth();
   const overscans = printFormat === 'cpnp' || mediaVariant === 'borderless';
-  const overL = overscans ? Math.max(0, bw.left - ov.left) : 1;
-  const overR = overscans ? Math.max(0, bw.right - ov.right) : 1;
+  const overL = overscans ? Math.max(0, bw.left + ov.left) : 1;
+  const overR = overscans ? Math.max(0, bw.right + ov.right) : 1;
   const tornL = overL * mmX;
   const tornR = overR * mmX;
   const rect = (id, x, y, w, h) =>
