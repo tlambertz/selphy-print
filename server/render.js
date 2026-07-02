@@ -122,12 +122,12 @@ async function applyIcc(jpeg, icc) {
   }
 }
 
-/** Calibration page, rendered at the exact borderless page raster and sent
-    through the same 1:1 pipeline as real prints. Rulers count page-mm inward
-    from every page edge; because borderless enlargement happens after this
-    raster, the first tick visible on the physical print directly reads off
-    the per-edge trim in page-mm — exactly the value the safe-area guide (and
-    the in-app calibration inputs) use. */
+/** Calibration/diagnostic page, rendered at the printer's full head-canvas
+    raster (1872×1248). Under the measured JPEG behavior (1:1 placement
+    centered on the canvas), the rulers count true mm inward from the canvas
+    edges, so the first tick visible on paper = per-edge trim directly. The
+    50 mm reference bars expose any hidden scaling: if they don't measure
+    50 mm on paper, the printer scaled the raster and the model is wrong. */
 export async function renderCalibration(page, dpi = 300) {
   const { w, h } = page; // landscape
   const pxPerMm = dpi / 25.4;
@@ -137,7 +137,13 @@ export async function renderCalibration(page, dpi = 300) {
       `<text x="${x}" y="${y}" font-size="28" font-family="monospace" fill="#000" text-anchor="${anchor}">${text}</text>`
     );
 
-  for (let mm = 1; mm <= 12; mm++) {
+  // 50 mm reference bars (detect hidden scaling) + nominal paper outline
+  const ref = 50 * pxPerMm;
+  ticks.push(`<rect x="${w / 2 - ref / 2}" y="${h / 2 + 130}" width="${ref}" height="8" fill="#000"/>`);
+  ticks.push(`<rect x="${w / 2 - 250}" y="${h / 2 - 250 - ref / 2}" width="8" height="${ref}" fill="#000"/>`);
+  label(w / 2, h / 2 + 170, 'bar above = exactly 50 mm if unscaled');
+
+  for (let mm = 1; mm <= 15; mm++) {
     const p = mm * pxPerMm;
     const major = mm % 5 === 0;
     const len = major ? 60 : 35;

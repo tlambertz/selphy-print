@@ -177,7 +177,8 @@ app.post('/api/calibrate', async () => {
   const job = enqueue(async (job) => {
     job.state = 'rendering';
     job.stateText = 'rendering calibration page…';
-    const jpeg = await renderCalibration(config.paper.page);
+    // Diagnostic raster at the full head canvas — see renderCalibration.
+    const jpeg = await renderCalibration(config.paper.canvas);
     await printBuffer(job, jpeg, { copies: 1, borderless: true, jobName: 'calibration' });
   });
   return { jobId: job.id };

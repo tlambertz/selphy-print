@@ -26,6 +26,8 @@ const PAPERS = {
     mm: { w: 148, h: 100 },
     // IPP page raster @300dpi — the render target for borderless
     page: { w: 1748, h: 1181 },
+    // full head canvas (Gutenprint print-dyesub.c) — diagnostic raster size
+    canvas: { w: 1872, h: 1248 },
     // printable area in bordered mode (printer default margins:
     // 2.5 mm sides, 3.7 mm ends → 140.6×95.0 mm)
     printable: { w: 1661, h: 1122 },
