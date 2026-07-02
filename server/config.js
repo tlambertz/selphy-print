@@ -122,7 +122,13 @@ export const config = {
 
   icc: {
     profile: env.ICC_PROFILE || null, // absolute path to .icc, empty = no color management
-    intent: env.ICC_INTENT || 'perceptual', // perceptual | relative | saturation | absolute
+    // Relative colorimetric (with black-point compensation, always applied in
+    // render.js) is the standard best default for photo printing: it leaves
+    // in-gamut colors accurate and only remaps what's out of gamut, so smooth
+    // gradients band less than under perceptual (measured: ~10% narrower bands).
+    // Perceptual compresses the whole gamut — better only for heavily
+    // out-of-gamut images. Override with ICC_INTENT.
+    intent: env.ICC_INTENT || 'relative', // perceptual | relative | saturation | absolute
     // The head canvas is only 1248×1872, so file size is a non-issue on the
     // LAN — encode near-lossless (q100, 4:4:4) to keep dye-sub gradients clean.
     quality: parseInt(env.JPEG_QUALITY || '100', 10),
