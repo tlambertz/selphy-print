@@ -50,6 +50,15 @@ function effectiveBlueWidth() {
     : blueWidth;
 }
 
+// ICC color management: on by default when the server has a profile; the user
+// can turn it off (per device) to A/B the color on prints and the Preview.
+let iccAvailable = false;
+const ICC_KEY = 'selphy-icc';
+function iccEnabled() {
+  const v = localStorage.getItem(ICC_KEY);
+  return v === null ? true : v === '1';
+}
+
 // Queue items: { id, blob, url, bitmap?, crop: {cx, cy, scale, rotate}, copies, state }
 // crop.cx/cy = center of the crop window in image coordinates (of the rotated image),
 // crop.scale = crop window width in image px (zoom), rotate = 0|90|180|270.
@@ -149,6 +158,12 @@ $('printer-status').addEventListener('click', () => {
   $('cal-defaults').textContent =
     EDGES.map((e) => `${e[0].toUpperCase()} ${overscan[e]}`).join(' · ') +
     ` · blue ${blueWidth.left}/${blueWidth.right} mm`;
+  const iccBox = $('opt-icc');
+  iccBox.checked = iccEnabled() && iccAvailable;
+  iccBox.disabled = !iccAvailable;
+  $('icc-note').textContent = iccAvailable
+    ? 'Applies to prints and the crop Preview, so you can A/B the color.'
+    : 'No ICC profile loaded on the server (set ICC_PROFILE) — prints go out untouched.';
   $('settings-printer').textContent = $('status-text').textContent;
   // load the calibration preview lazily, only when the sheet opens
   const img = document.querySelector('#cal-preview img');
@@ -210,6 +225,7 @@ async function fetchConfig() {
     if (cfg.paper) paper = cfg.paper;
     if (cfg.overscan) overscan = cfg.overscan;
     if (cfg.blueWidth) blueWidth = cfg.blueWidth;
+    if (cfg.icc) iccAvailable = !!cfg.icc.enabled;
     if (cfg.printFormat) printFormat = cfg.printFormat;
     if (cfg.mediaVariant) mediaVariant = cfg.mediaVariant;
   } catch {}
@@ -521,6 +537,56 @@ $('ed-copies-plus').addEventListener('click', () => {
   ed.copies = Math.min(99, ed.copies + 1);
   $('ed-copies').textContent = ed.copies + '×';
 });
+$('opt-icc').addEventListener('change', (e) => {
+  localStorage.setItem(ICC_KEY, e.target.checked ? '1' : '0');
+});
+
+// Crop rect (image fractions) for the LIVE editor state — mirrors cropForPrint.
+function currentCropRect() {
+  clampCrop();
+  const img = rotatedSize();
+  const w = ed.crop.scale;
+  const h = w / paperAspect();
+  return { x: (ed.crop.cx - w / 2) / img.w, y: (ed.crop.cy - h / 2) / img.h, w: w / img.w, h: h / img.h };
+}
+
+// Render the exact bytes the printer would get and show them — no paper.
+async function showPreview() {
+  if (!ed) return;
+  const btn = $('ed-preview');
+  const label = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = 'Rendering…';
+  try {
+    const form = new FormData();
+    form.append('image', ed.item.blob, 'photo.jpg');
+    form.append('options', JSON.stringify({
+      crop: currentCropRect(),
+      rotate: ed.rotate,
+      border: $('opt-border').checked,
+      overscan: effectiveOverscan(),
+      icc: iccEnabled(),
+    }));
+    const res = await fetch('api/preview', { method: 'POST', body: form });
+    if (!res.ok) throw new Error((await res.text()) || res.statusText);
+    const url = URL.createObjectURL(await res.blob());
+    const el = $('preview-img');
+    if (el.dataset.url) URL.revokeObjectURL(el.dataset.url);
+    el.dataset.url = url;
+    el.src = url;
+    $('preview-modal').hidden = false;
+  } catch (err) {
+    toast('Preview failed: ' + err.message);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = label;
+  }
+}
+$('ed-preview').addEventListener('click', showPreview);
+const closePreview = () => ($('preview-modal').hidden = true);
+$('preview-close').addEventListener('click', closePreview);
+document.querySelector('.preview-backdrop').addEventListener('click', closePreview);
+
 $('ed-cancel').addEventListener('click', closeEditor);
 $('ed-done').addEventListener('click', () => {
   ed.item.crop = { ...ed.crop };
@@ -564,6 +630,7 @@ async function printAll() {
           border,
           // per-device calibration → the server pre-compensates the render
           overscan: effectiveOverscan(),
+          icc: iccEnabled(),
         })
       );
       const res = await fetch('api/print', { method: 'POST', body: form });

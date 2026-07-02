@@ -132,82 +132,103 @@ app.get('/api/printer', async () => {
   }
 });
 
-app.post('/api/print', async (req, reply) => {
+/* Render geometry for the current printer config + per-job options: the target
+ * raster, per-edge bleed (px), and whether the bleed is white (bordered) or
+ * mirrored image (borderless). Shared by /api/print and /api/preview so the
+ * preview is byte-faithful to what gets sent.
+ *
+ * - cpnp / ipp-jpeg with borderless media: render at the head canvas
+ *   (1872×1248) with the structural canvas overhang as bleed — CPNP
+ *   fill-scales it off the paper (true full bleed). NB the plain IPP-JPEG path
+ *   instead FITS the JPEG to the paper, so that same overhang would print as an
+ *   inset border — measured. True borderless ⇒ PRINT_FORMAT=cpnp.
+ * - raster (pwg/urf): the 300 dpi page raster.
+ * - ipp-jpeg with plain media: the bare paper rect (canonPage).
+ * Bordered mode adds a ~2.5 mm side / 3.7 mm end white frame. */
+function buildRenderPlan(options) {
+  const borderless = !options.border;
+  // Per-edge borderless trim in page-mm: the client sends its calibrated
+  // values (per-device localStorage); fall back to the server defaults.
+  const overscanMm = {};
+  for (const edge of ['top', 'bottom', 'left', 'right']) {
+    const v = Number(options.overscan?.[edge]);
+    // negative = the mapping overshoots the paper boundary on that edge
+    overscanMm[edge] = isFinite(v) && v >= -5 && v <= 12 ? v : config.overscan[edge];
+  }
+  const raster = RASTER[config.printFormat];
+  // mm → px: JPEG targets live on the device grid (11.835 px/mm); raster
+  // targets on the IPP-standard 300 dpi grid.
+  const pxPerMm = raster ? 300 / 25.4 : 11.835;
+  const bleed = {
+    top: Math.round(overscanMm.top * pxPerMm),
+    bottom: Math.round(overscanMm.bottom * pxPerMm),
+    left: Math.round(overscanMm.left * pxPerMm),
+    right: Math.round(overscanMm.right * pxPerMm),
+  };
+  const FRAME = { top: 30, bottom: 30, left: 44, right: 44 }; // bordered white
+
+  let target, outBleed;
+  if (config.printFormat === 'cpnp' || (!raster && config.mediaVariant === 'borderless')) {
+    const st = config.paper.canvasBleed; // landscape: ends=left/right
+    target = config.paper.canvas;
+    outBleed = {
+      top: st.sides + bleed.top, bottom: st.sides + bleed.bottom,
+      left: st.ends + bleed.left, right: st.ends + bleed.right,
+    };
+    if (!borderless) {
+      outBleed.top += FRAME.top; outBleed.bottom += FRAME.bottom;
+      outBleed.left += FRAME.left; outBleed.right += FRAME.right;
+    }
+  } else if (raster) {
+    target = config.paper.page;
+    outBleed = borderless ? bleed : { ...FRAME };
+  } else {
+    target = config.paper.canonPage;
+    outBleed = borderless ? bleed : { ...FRAME };
+  }
+  return { target, bleed: outBleed, padWhite: !borderless, raster: !!raster };
+}
+
+// Parse the multipart body of a print/preview request: the image + options.
+async function parsePrintRequest(req) {
   let imageBuf = null;
   let options = {};
   for await (const part of req.parts()) {
     if (part.type === 'file' && part.fieldname === 'image') {
       imageBuf = await part.toBuffer();
     } else if (part.type === 'field' && part.fieldname === 'options') {
-      try {
-        options = JSON.parse(part.value);
-      } catch {
-        return reply.code(400).send('bad options JSON');
-      }
+      options = JSON.parse(part.value); // caller catches
     }
+  }
+  return { imageBuf, options };
+}
+
+app.post('/api/print', async (req, reply) => {
+  let imageBuf, options;
+  try {
+    ({ imageBuf, options } = await parsePrintRequest(req));
+  } catch {
+    return reply.code(400).send('bad options JSON');
   }
   if (!imageBuf) return reply.code(400).send('missing image');
 
   const copies = Math.min(Math.max(parseInt(options.copies, 10) || 1, 1), 99);
-  const borderless = !options.border;
-
-  // Per-edge borderless trim in page-mm: the client sends its calibrated
-  // values (per-device localStorage); fall back to the server defaults.
-  // Renders pre-compensate for it, so calibration changes the actual print.
-  const overscanMm = {};
-  for (const edge of ['top', 'bottom', 'left', 'right']) {
-    const v = Number(options.overscan?.[edge]);
-    // negative = the mapping overshoots the paper boundary on that edge
-    // (the structural canvas bleed absorbs it, so total bleed stays ≥ 0)
-    overscanMm[edge] = isFinite(v) && v >= -5 && v <= 12 ? v : config.overscan[edge];
-  }
-  // mm → px at the render target's resolution: JPEG targets (canonPage,
-  // canvas) live on the device grid (11.835 px/mm); raster targets on the
-  // IPP-standard 300 dpi grid.
-  const bleedPx = (pxPerMm) => ({
-    top: Math.round(overscanMm.top * pxPerMm),
-    bottom: Math.round(overscanMm.bottom * pxPerMm),
-    left: Math.round(overscanMm.left * pxPerMm),
-    right: Math.round(overscanMm.right * pxPerMm),
-  });
-  const bleed = bleedPx(RASTER[config.printFormat] ? 300 / 25.4 : 11.835);
+  // ICC is on unless the client explicitly opts out (color A/B testing).
+  const icc = options.icc === false ? {} : config.icc;
+  const plan = buildRenderPlan(options);
+  const rotate = [0, 90, 180, 270].includes(options.rotate) ? options.rotate : 0;
+  const crop = options.crop || null;
 
   const job = enqueue(async (job) => {
     job.state = 'rendering';
     job.stateText = 'processing image…';
 
     if (config.printFormat === 'cpnp') {
-      // Canon's own path. Measured firmware behavior: any JPEG is aspect-fill
-      // scaled onto the full head canvas (1872×1248) and centered on the
-      // sheet, so we render AT the canvas (scale 1.0) with the photo composed
-      // for the centered paper window. Bleed per edge = structural canvas
-      // overhang (always trimmed) + calibrated registration. Like Canon's
-      // app we always print with the borderless spool flag — a "bordered"
-      // print is a white frame baked into the image.
       const cv = config.paper.canvas;
-      const structural = config.paper.canvasBleed; // landscape: ends=left/right
-      const cpnpBleed = {
-        top: structural.sides + bleed.top,
-        bottom: structural.sides + bleed.bottom,
-        left: structural.ends + bleed.left,
-        right: structural.ends + bleed.right,
-      };
-      if (!borderless) {
-        // classic SELPHY bordered look: ~2.5 mm sides / 3.7 mm ends of white
-        cpnpBleed.top += 30; cpnpBleed.bottom += 30;
-        cpnpBleed.left += 44; cpnpBleed.right += 44;
-      }
       const jpeg = await renderForPrint(imageBuf, {
-        crop: options.crop || null,
-        rotate: [0, 90, 180, 270].includes(options.rotate) ? options.rotate : 0,
-        target: cv,
-        bleed: cpnpBleed,
-        padWhite: !borderless,
-        icc: config.icc,
-        output: 'jpeg',
+        crop, rotate, target: plan.target, bleed: plan.bleed, padWhite: plan.padWhite, icc, output: 'jpeg',
       });
-      const url = printerUrl();
-      const host = new URL(url).hostname;
+      const host = new URL(printerUrl()).hostname;
       for (let i = 0; i < copies; i++) {
         job.state = 'printing';
         job.stateText = copies > 1 ? `printing ${i + 1}/${copies}…` : 'printing…';
@@ -220,56 +241,46 @@ app.post('/api/print', async (req, reply) => {
       return;
     }
 
-    // IPP fallbacks. The JPEG path aspect-fits the image BY PIXELS (DPI
-    // metadata ignored) onto a firmware rect that depends on the media
-    // variant: with PLAIN media it's the paper rect (canonPage in device px
-    // — measured: canvas padding printed as inset borders), with the
-    // zero-margin borderless media-col it should be the head canvas, like
-    // URF's enlargement — so we render canvas-size with the same overscan
-    // composition as CPNP and the fit scale stays 1.0. The calibration page
-    // goes through this exact geometry and verifies it. Raster formats keep
-    // the 300 dpi page geometry their headers declare.
-    const raster = RASTER[config.printFormat];
-    const overscans = !raster && config.mediaVariant === 'borderless';
-    let target, ippBleed;
-    if (raster) {
-      target = config.paper.page;
-      ippBleed = borderless ? bleed : { top: 30, bottom: 30, left: 44, right: 44 };
-    } else if (overscans) {
-      const st = config.paper.canvasBleed;
-      target = config.paper.canvas;
-      ippBleed = {
-        top: st.sides + bleed.top,
-        bottom: st.sides + bleed.bottom,
-        left: st.ends + bleed.left,
-        right: st.ends + bleed.right,
-      };
-      if (!borderless) {
-        ippBleed.top += 30; ippBleed.bottom += 30;
-        ippBleed.left += 44; ippBleed.right += 44;
-      }
-    } else {
-      target = config.paper.canonPage;
-      ippBleed = borderless ? bleed : { top: 30, bottom: 30, left: 44, right: 44 };
-    }
     const rendered = await renderForPrint(imageBuf, {
-      crop: options.crop || null,
-      rotate: [0, 90, 180, 270].includes(options.rotate) ? options.rotate : 0,
-      target,
-      bleed: ippBleed,
-      padWhite: !borderless,
-      icc: config.icc,
-      output: raster ? 'raw' : 'jpeg',
+      crop, rotate, target: plan.target, bleed: plan.bleed, padWhite: plan.padWhite, icc,
+      output: plan.raster ? 'raw' : 'jpeg',
     });
-    if (raster) {
-      const data = raster.encode(rendered.rgb, rendered.width, rendered.height);
-      await printBuffer(job, data, { copies, format: raster.mime });
+    if (plan.raster) {
+      const r = RASTER[config.printFormat];
+      const data = r.encode(rendered.rgb, rendered.width, rendered.height);
+      await printBuffer(job, data, { copies, format: r.mime });
     } else {
       await printBuffer(job, rendered, { copies, format: 'image/jpeg' });
     }
   });
 
   return { jobId: job.id };
+});
+
+// Renders exactly what /api/print would send, but returns it as a viewable
+// JPEG instead of printing — a no-paper diagnostic for crop, bleed and color.
+// (For raster formats the bytes on the wire differ, but the pixels are these.)
+app.post('/api/preview', async (req, reply) => {
+  let imageBuf, options;
+  try {
+    ({ imageBuf, options } = await parsePrintRequest(req));
+  } catch {
+    return reply.code(400).send('bad options JSON');
+  }
+  if (!imageBuf) return reply.code(400).send('missing image');
+
+  const icc = options.icc === false ? {} : config.icc;
+  const plan = buildRenderPlan(options);
+  const rotate = [0, 90, 180, 270].includes(options.rotate) ? options.rotate : 0;
+  const jpeg = await renderForPrint(imageBuf, {
+    crop: options.crop || null, rotate, target: plan.target, bleed: plan.bleed,
+    padWhite: plan.padWhite, icc, output: 'jpeg',
+  });
+  // Print render is portrait (short edge first); rotate back for on-screen view.
+  const landscape = await sharp(jpeg).rotate(270).jpeg({ quality: 90 }).toBuffer();
+  reply.header('cache-control', 'no-store');
+  reply.type('image/jpeg');
+  return landscape;
 });
 
 app.get('/api/jobs/:id', async (req, reply) => {
