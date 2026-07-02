@@ -349,6 +349,19 @@ export async function printJob(printerUrl, data, opts = {}) {
   };
 }
 
+export async function cancelJob(printerUrl, jobId, timeoutMs = 5000) {
+  const body = encodeRequest('Cancel-Job', nextRequestId++, [
+    {
+      tag: TAG.operation,
+      attrs: opAttrs(printerUrl, {
+        'job-id': { type: 'integer', value: jobId },
+      }),
+    },
+  ]);
+  const res = await post(printerUrl, body, timeoutMs);
+  return { statusCode: res.statusCode };
+}
+
 // job-state enums (RFC 8011): 3 pending, 4 held, 5 processing, 6 stopped,
 // 7 canceled, 8 aborted, 9 completed
 export async function getJobAttributes(printerUrl, jobId, timeoutMs = 5000) {
