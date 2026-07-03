@@ -531,6 +531,34 @@ body {
   font-variant-numeric: tabular-nums;
 }
 
+/* Color-mode picker: firmware / ICC profiles / off, right in the crop editor */
+.editor-color {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+  padding: 0 14px 6px;
+}
+.color-label {
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--faint);
+}
+.color-presets { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; }
+.color-chip[aria-pressed="true"] {
+  background: var(--accent, #ff5470);
+  border-color: transparent;
+  color: #fff;
+}
+.color-note {
+  flex-basis: 100%;
+  text-align: center;
+  font-size: 11.5px;
+  color: var(--faint);
+}
+
 #editor-hint {
   margin: 0;
   padding: 0 16px calc(env(safe-area-inset-bottom, 0px) + 12px);
@@ -581,6 +609,37 @@ body {
 .sheet-help { color: var(--muted); font-size: 13px; margin: 0 0 12px; }
 .sheet-help a { color: var(--accent-2); font-weight: 600; text-decoration: none; }
 .sheet-help.subtle { color: var(--faint); font-size: 12px; margin: 10px 0 0; }
+
+/* Info popover: an (i) that reveals help on hover (desktop) or tap/focus
+   (mobile), so explanatory text isn't in your face every time. */
+.infotip { position: relative; display: inline-flex; vertical-align: middle; outline: none; cursor: help; }
+.info-i {
+  width: 17px; height: 17px; border-radius: 50%;
+  border: 1px solid var(--line-strong); color: var(--muted);
+  font: italic 700 11px/1 Georgia, 'Times New Roman', serif;
+  display: inline-flex; align-items: center; justify-content: center;
+  user-select: none; transition: color 0.12s, border-color 0.12s;
+}
+.infotip:hover .info-i, .infotip:focus .info-i, .infotip:focus-within .info-i {
+  color: #fff; border-color: var(--accent);
+}
+.info-pop {
+  position: absolute; z-index: 40; top: calc(100% + 7px); left: 0;
+  width: max-content; max-width: min(300px, 74vw);
+  background: var(--surface-3, #23262e); border: 1px solid var(--line-strong);
+  border-radius: var(--r-sm); padding: 10px 12px;
+  font: 400 12.5px/1.5 inherit; color: var(--muted);
+  box-shadow: var(--shadow-2); text-align: left;
+  opacity: 0; visibility: hidden; transform: translateY(-3px);
+  transition: opacity 0.12s, transform 0.12s, visibility 0.12s;
+}
+.info-pop.up { top: auto; bottom: calc(100% + 7px); transform: translateY(3px); }
+.info-pop.right { left: auto; right: 0; }
+.infotip:hover .info-pop, .infotip:focus .info-pop, .infotip:focus-within .info-pop {
+  opacity: 1; visibility: visible; transform: translateY(0);
+}
+.info-pop b { color: var(--text); }
+h3 .infotip { margin-left: 6px; }
 #cal-preview {
   position: relative;
   display: block;

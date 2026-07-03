@@ -151,7 +151,12 @@
         </button>
       </div>
     </div>
-    <p id="editor-hint">Drag to move · pinch to zoom · <b>Max fill</b> = most photo, edges flush · <b>+1 mm bleed</b> = safe borderless · frame = your photo after tearing. The half-dimmed strips print past the tear line (torn off with the stubs); everything darker never reaches paper. The tear/edge lands inside the dashed band.</p>
+    <div class="editor-color" role="group" aria-label="Color mode">
+      <span class="color-label">Color</span>
+      <div id="ed-color" class="color-presets"></div>
+      <span id="ed-color-note" class="color-note subtle"></span>
+    </div>
+    <p id="editor-hint">Drag to move · pinch to zoom<span class="infotip" tabindex="0" role="note" aria-label="Crop help"><span class="info-i">i</span><span class="info-pop up"><b>Max fill</b> = most photo, edges flush. <b>+1 mm bleed</b> = safe borderless. The frame is your photo after tearing; the half-dimmed strips print past the tear line (torn off with the stubs), and darker areas never reach paper. The tear/edge lands inside the dashed band.</span></span></p>
   </div>
 
   <!-- Printer / calibration sheet -->
@@ -161,21 +166,23 @@
       <h2>Printer</h2>
       <p id="settings-printer" class="sheet-sub">—</p>
 
-      <h3>Borderless trim calibration</h3>
-      <p class="sheet-help">
-        The ruler page prints through the exact same pipeline as photos.
-        Hold it so the <b>T</b> reads on top — the letters match the crop
-        editor. Each ruler starts at the image edge and counts millimeters
-        inward, so part of every ruler lands beyond the paper edge or on the
-        tear-off stub. Per edge, read the number where the paper edge or
-        tear line crosses the ruler, and enter the four readings below —
-        every print is then shifted and bled by exactly that much, so your
-        crop lands on the final photo edge-to-edge. Sanity checks: the
-        50&nbsp;mm bars must measure 50&nbsp;mm, and ink should reach a few
-        mm past both tear lines. A white gap before a tear line shouldn’t
-        happen in borderless mode — if you see one, the media variant is
-        misconfigured, not something to calibrate around.
-      </p>
+      <h3>Borderless trim calibration
+        <span class="infotip" tabindex="0" role="note" aria-label="How calibration works">
+          <span class="info-i">i</span>
+          <span class="info-pop">
+            The ruler page prints through the exact same pipeline as photos.
+            Hold it so the <b>T</b> reads on top. Each ruler counts mm inward
+            from the image edge, so part of it lands beyond the paper edge or on
+            the tear-off stub. Per edge, read the number where the paper edge or
+            tear line crosses the ruler and enter it below — every print is then
+            shifted &amp; bled by that much so your crop lands edge-to-edge.
+            Sanity: the 50&nbsp;mm bars must measure 50&nbsp;mm, and ink should
+            reach a few mm past both tear lines. A white gap before a tear line
+            means the media variant is misconfigured, not something to
+            calibrate around.
+          </span>
+        </span>
+      </h3>
       <a id="cal-preview" href="api/calibrate/preview" target="_blank" title="Open full-size preview">
         <img alt="Calibration sheet preview" loading="lazy" />
         <span class="cal-preview-tag">preview — tap to enlarge</span>
@@ -208,10 +215,8 @@
         </label>
       </div>
       <p class="sheet-help subtle">
-        Edge values = ruler reading where the paper edge / tear line crosses
-        (negative = it sits in the blue zone). Width of blue region = how many
-        mm wide the blue strip is on that end. Stored on this device. Server
-        defaults: <span id="cal-defaults">—</span>.
+        Stored on this device. Server defaults: <span id="cal-defaults">—</span>
+        <span class="infotip" tabindex="0" role="note" aria-label="What the values mean"><span class="info-i">i</span><span class="info-pop up right">Edge values = the ruler reading where the paper edge / tear line crosses (negative = it sits in the blue zone). Width of blue region = how many mm wide the blue strip is on that end.</span></span>
       </p>
 
       <h3>Color management</h3>

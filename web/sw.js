@@ -1,7 +1,7 @@
 /* Service worker: app-shell cache + Web Share Target receiver.
    All URLs are resolved against the registration scope so the app works at
    any mount point (site root, path-prefix proxies, …). */
-const CACHE = 'selphy-shell-v17';
+const CACHE = 'selphy-shell-v18';
 const SCOPE = self.registration.scope; // absolute, ends with '/'
 const scopeUrl = (p) => new URL(p, SCOPE).toString();
 
