@@ -1,6 +1,11 @@
 services:
   selphy-print:
-    build: .
+    build:
+      context: .
+      args:
+        # APK source: "repo" trusts the committed web/selphy-share.apk (default,
+        # fast); "build" compiles it from android/ (pulls the Android SDK).
+        APK: repo
     image: selphy-print
     container_name: selphy-print
     restart: unless-stopped

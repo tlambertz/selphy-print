@@ -1,10 +1,16 @@
 # syntax=docker/dockerfile:1
 
-# ── Stage 1: build the Android companion APK ───────────────────────────────
+# APK source, "repo" (trust the committed web/selphy-share.apk, default) or
+# "build" (compile it from android/ in a throwaway stage). Select with:
+#   docker build --build-arg APK=build .
+# With APK=repo the heavy Android-SDK stage is never built.
+ARG APK=repo
+
+# ── APK option A: build the companion app from source ──────────────────────
 # Heavy (pulls the Android SDK), but multi-stage: none of the toolchain lands
 # in the runtime image — only the finished APK is copied out. gradle 8.7 / JDK
-# 17 match the app's AGP 8.5 / compileSdk 35.
-FROM gradle:8.7-jdk17 AS apk
+# 17 match the app's AGP 8.5 / compileSdk 35 (build-tools pinned in build.gradle).
+FROM gradle:8.7-jdk17 AS apk-build
 ENV ANDROID_SDK_ROOT=/opt/android-sdk
 ENV PATH="$PATH:$ANDROID_SDK_ROOT/cmdline-tools/latest/bin"
 RUN apt-get update \
@@ -21,9 +27,17 @@ RUN curl -fsSL -o /tmp/cmdtools.zip \
 WORKDIR /build
 COPY android ./android
 # assembleRelease auto-generates a self-signed keystore (keytool ships in the JDK).
-RUN cd android && gradle --no-daemon assembleRelease
+RUN cd android && gradle --no-daemon assembleRelease \
+ && mkdir -p /apk && cp android/app/build/outputs/apk/release/*.apk /apk/selphy-share.apk
 
-# ── Stage 2: fetch the free ICC profiles ───────────────────────────────────
+# ── APK option B: trust the committed binary ───────────────────────────────
+FROM scratch AS apk-repo
+COPY web/selphy-share.apk /apk/selphy-share.apk
+
+# ── select the APK source per the build arg ────────────────────────────────
+FROM apk-${APK} AS apk-src
+
+# ── fetch the free ICC profiles ────────────────────────────────────────────
 FROM debian:stable-slim AS profiles
 RUN apt-get update \
  && apt-get install -y --no-install-recommends curl ca-certificates \
@@ -33,7 +47,7 @@ COPY scripts/fetch-profile.sh ./scripts/fetch-profile.sh
 # Writes ./profiles (warns-but-continues if a profile host is down).
 RUN bash scripts/fetch-profile.sh
 
-# ── Stage 3: runtime image ─────────────────────────────────────────────────
+# ── runtime image ──────────────────────────────────────────────────────────
 FROM node:24-slim
 # tificc (lcms2) is a hard runtime dependency: render.js applies the ICC
 # profile with it before encoding. sharp bundles its own libvips, so nothing
@@ -52,10 +66,10 @@ RUN npm ci --omit=dev && npm cache clean --force
 COPY server ./server
 COPY web ./web
 
-# Baked in from the build stages: the freshly-built companion APK and the
+# Baked in: the selected companion APK (committed or freshly built) and the
 # fetched ICC profiles (auto-discovered from ./profiles — no runtime mount
 # needed; drop more *.icc in there or override ICC_DIR to add your own).
-COPY --from=apk /build/android/app/build/outputs/apk/release/*.apk ./web/selphy-share.apk
+COPY --from=apk-src /apk/selphy-share.apk ./web/selphy-share.apk
 COPY --from=profiles /p/profiles ./profiles
 
 # Run unprivileged; give the built-in `node` user a writable print archive.

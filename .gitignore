@@ -5,3 +5,8 @@ result
 print-archive/
 # fetched via scripts/fetch-profile.sh — redistribution terms unclear
 profiles/*.icc
+# APK signing key, auto-generated on first build — private, never commit
+android/keystore.jks
+# gradle build output
+android/.gradle/
+android/app/build/

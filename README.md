@@ -91,20 +91,25 @@ for bulk shares (nginx: `client_max_body_size 64m;`).
 
 The image is self-contained — nothing to mount to get started:
 `liblcms2-utils` (for `tificc`), the two free ICC profiles (fetched at build
-time), and the companion APK (compiled in a build stage) are all baked in, and
-`sharp` ships its own libvips. Multi-stage keeps the *runtime* image small; the
-build itself is heavier, since one stage pulls the Android SDK to compile the
-APK.
+time), and the companion APK are all baked in, and `sharp` ships its own
+libvips. Multi-stage keeps the *runtime* image small.
+
+**APK source (`--build-arg APK=`).** By default the build trusts the committed
+`web/selphy-share.apk` (`APK=repo`, fast — the Android stage is pruned). Pass
+`APK=build` to compile it from `android/` instead, in a throwaway stage that
+pulls the Android SDK; only the finished APK lands in the runtime image.
 
 ```bash
 # set PRINTER_HOST in docker-compose.yml, then:
-docker compose up -d --build
+docker compose up -d --build              # trusts the committed APK
+# to build the APK from source instead, edit docker-compose.yml (args.APK: build)
 ```
 
 Or without compose:
 
 ```bash
-docker build -t selphy-print .
+docker build -t selphy-print .                        # APK=repo (default)
+docker build -t selphy-print --build-arg APK=build .  # compile the APK from source
 docker run -d --name selphy-print -p 8080:8080 \
   -e PRINTER_HOST=192.168.1.42 \
   -v "$PWD/print-archive:/app/print-archive" \
@@ -170,15 +175,24 @@ services.selphy-print = {
   printerHost = "192.168.1.42";           # or CP1500xxxxxx.local
   # The two free profiles are fetched at build time and selectable per photo;
   # override `iccProfilesDir` to supply your own, or `iccProfile` to pin a default.
+  # buildApkFromSource = true;             # compile the APK instead of trusting the repo one
 };
 ```
 
 The module fetches the ICC profiles, runs as a `DynamicUser`, and archives
-prints under `/var/lib/selphy-print`. The served companion APK is the committed
-`web/selphy-share.apk`; to rebuild it from source with a pinned Android
-SDK + gradle, run **`nix run .#build-apk`** from the repo root (it fetches the
-Android Gradle Plugin and writes `web/selphy-share.apk` — the Nix equivalent of
-the Docker APK stage). The package builds with `buildNpmPackage`.
+prints under `/var/lib/selphy-print`. The package builds with `buildNpmPackage`.
+
+**APK source.** By default the served companion APK is the committed
+`web/selphy-share.apk` (package `.#selphy-print`). Set
+`services.selphy-print.buildApkFromSource = true` to compile it from `android/`
+instead (package `.#selphy-print-own-apk`): a sandboxed, cached derivation that
+builds the APK with a pinned Android SDK + gradle and bakes it in. Its gradle
+dependencies are pinned in `android/gradle-deps.json`; after changing anything
+under `android/`, regenerate that lockfile with
+`nix run .#packages.<system>.apk.mitmCache.updateScript`. You can also build the
+APK on its own with `nix build .#apk`, or write it back into the repo working
+tree with **`nix run .#build-apk`** (impure — fetches the Android Gradle Plugin
+at invocation time; handy for local iteration without touching the lockfile).
 
 ## Configuration (environment variables)
 
