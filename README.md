@@ -76,20 +76,72 @@ for bulk shares (nginx: `client_max_body_size 64m;`).
 
 ### Docker
 
-`liblcms2-utils` (for `tificc`) is baked into the image; `sharp` ships its own
-libvips, so there's nothing else to install.
+The image is self-contained — nothing to mount to get started:
+`liblcms2-utils` (for `tificc`), the two free ICC profiles (fetched at build
+time), and the companion APK (compiled in a build stage) are all baked in, and
+`sharp` ships its own libvips. Multi-stage keeps the *runtime* image small; the
+build itself is heavier, since one stage pulls the Android SDK to compile the
+APK.
 
 ```bash
-# edit docker-compose.yml — set PRINTER_HOST and the ICC profile path
+# set PRINTER_HOST in docker-compose.yml, then:
 docker compose up -d --build
 ```
 
-The image runs as the non-root `node` user and exposes a `HEALTHCHECK` that
-polls `/api/config`. Mount your ICC profile read-only (the compose file does
-this from `./profiles`); optionally bind-mount `/app/print-archive` to keep a
-copy of every print. To reach the printer by its `CP1500xxxxxx.local` mDNS name
-instead of an IP, set `network_mode: host` (bridged networking can't resolve
-`.local`).
+Or without compose:
+
+```bash
+docker build -t selphy-print .
+docker run -d --name selphy-print -p 8080:8080 \
+  -e PRINTER_HOST=192.168.1.42 \
+  -v "$PWD/print-archive:/app/print-archive" \
+  selphy-print
+```
+
+The image runs as the non-root `node` user with a `HEALTHCHECK` on `/api/config`.
+The bundled profiles are auto-discovered and selectable per photo; to add your
+own, mount a dir of `*.icc` at `/app/profiles` (or set `ICC_DIR`). Bind-mount
+`/app/print-archive` to keep a copy of every print. To reach the printer by its
+`CP1500xxxxxx.local` mDNS name instead of an IP, add `network_mode: host`
+(bridged networking can't resolve `.local`).
+
+### HTTPS via Cloudflare Tunnel
+
+The PWA needs HTTPS with a browser-trusted cert. The easiest way — no open
+ports, no cert management — is a **Cloudflare Tunnel**, run on the host **next
+to** the container (not inside it) so it can reach `localhost:8080`. It needs a
+domain on Cloudflare and `cloudflared` installed:
+
+```bash
+cloudflared tunnel login                       # one-time browser auth
+cloudflared tunnel create selphy
+cloudflared tunnel route dns selphy selphy.example.com
+```
+
+`~/.cloudflared/config.yml`:
+
+```yaml
+tunnel: selphy
+credentials-file: /root/.cloudflared/<TUNNEL_ID>.json
+ingress:
+  - hostname: selphy.example.com
+    service: http://localhost:8080     # the selphy-print container's mapped port
+  - service: http_status:404
+```
+
+```bash
+cloudflared tunnel run selphy          # or install as a service:
+sudo cloudflared service install
+```
+
+`https://selphy.example.com` now serves the app with a real cert — open it on
+your phone and install. (For a throwaway URL with zero setup,
+`cloudflared tunnel --url http://localhost:8080` prints a random
+`*.trycloudflare.com` HTTPS address, but it changes on every run.)
+
+Any other HTTPS reverse proxy (Caddy, nginx + Let's Encrypt, Tailscale Funnel)
+works too — just forward to the server's plain-HTTP port and allow ~64 MB
+bodies for bulk shares.
 
 ### NixOS (flake)
 
@@ -103,12 +155,17 @@ services.selphy-print = {
   enable = true;
   port = 8080;
   printerHost = "192.168.1.42";           # or CP1500xxxxxx.local
-  iccProfile = /var/lib/selphy/CP1500-farbenwerk.icc;
+  # The two free profiles are fetched at build time and selectable per photo;
+  # override `iccProfilesDir` to supply your own, or `iccProfile` to pin a default.
 };
 ```
 
-The package uses `buildNpmPackage` with `npmDepsHash = lib.fakeHash`; the first
-build aborts printing the real hash — paste it into `flake.nix` once.
+The module fetches the ICC profiles, runs as a `DynamicUser`, and archives
+prints under `/var/lib/selphy-print`. The companion APK is the prebuilt
+`web/selphy-share.apk` (build it with gradle as below, or let the Docker image
+compile it). The package uses `buildNpmPackage` with `npmDepsHash =
+lib.fakeHash`; the first build aborts printing the real hash — paste it into
+`flake.nix` once.
 
 ## Configuration (environment variables)
 

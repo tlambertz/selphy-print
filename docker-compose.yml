@@ -8,16 +8,17 @@ services:
       - "8080:8080"
     environment:
       PRINTER_HOST: "192.168.1.42" # <- your CP1500's IP or CP1500xxxxxx.local
-      ICC_PROFILE: /profiles/CP1500-farbenwerk.icc
-      # relative = accurate in-gamut + black-point compensation (default);
-      # perceptual = compresses the whole gamut, better only for very saturated art
+      # The free ICC profiles are baked into the image and auto-discovered
+      # (selectable per photo in the app); the default is farbenwerk. To pin a
+      # different default or add your own, set ICC_PROFILE / mount over
+      # /app/profiles. relative intent = accurate in-gamut + black-point
+      # compensation; perceptual only helps very saturated art.
       ICC_INTENT: relative
       # Per-edge trim "top,bottom,left,right" in mm (crop-editor orientation).
       # Measure it with the in-app calibration page (T/B/L/R letters); this is
       # the server-wide default, overridable per device in the browser.
       OVERSCAN_MM: "1,1,1,1"
     volumes:
-      - ./profiles:/profiles:ro
       # Keep a copy of every print (untouched upload + rendered image).
       # The dir is owned by the container's `node` user (uid 1000).
       - ./print-archive:/app/print-archive

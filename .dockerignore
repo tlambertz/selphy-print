@@ -1,4 +1,5 @@
-# Build context only needs package manifests + server/ + web/ (see Dockerfile).
+# The build needs: package manifests, server/, web/, android/ (APK build stage)
+# and scripts/fetch-profile.sh (profiles stage). Everything else is excluded.
 node_modules
 npm-debug.log
 .git
@@ -6,10 +7,8 @@ npm-debug.log
 .dockerignore
 Dockerfile
 docker-compose.yml
-android
 test
 docs
-scripts
 profiles
 print-archive
 result
@@ -19,3 +18,8 @@ flake.lock
 *.log
 .claude
 .audit
+# APK build outputs (built fresh in the image; keep local artifacts out)
+android/.gradle
+android/build
+android/app/build
+android/keystore.jks

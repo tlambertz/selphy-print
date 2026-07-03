@@ -38,6 +38,13 @@ firmware honours.
 - Print image pixels = `ceil(paper_mm * pixel_per_mm)`
   → postcard ≈ ceil(100×11.835) × ceil(148×11.835) = **1184 × 1752 px**
 
+The firmware's native head raster is slightly larger — **1248 × 1872 px** for
+postcard — which `selphy_print`'s USB backend independently confirms (its
+CP1500 raw stream is `cols=1248 rows=1872` at 300 dpi). The app renders at that
+1248×1872 canvas so the firmware's fill-scale is 1.0. (Over USB the printer
+takes raw YUV444/CMY planes; over the network it takes a JPEG via CPNP — the
+same head geometry, different transport.)
+
 ## CPNP framing (`CPNPSock`)
 
 All packets start with ASCII `CPNP` = `{67,80,78,80}`. Byte 4 = 0x01 for
