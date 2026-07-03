@@ -81,6 +81,8 @@
       <label class="btn primary big" for="file-input">Add photos</label>
     </div>
     <div id="grid"></div>
+    <!-- Session print history (this session only — cleared on reload). -->
+    <section id="history" hidden></section>
   </main>
 
   <input type="file" id="file-input" accept="image/*" multiple hidden />
@@ -93,7 +95,10 @@
       <button id="btn-clear" class="btn icon-btn" title="Clear queue" aria-label="Clear queue">
         <svg viewBox="0 0 24 24"><path d="M4 7h16M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2m-9 0 1 13a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1l1-13" /></svg>
       </button>
-      <button id="btn-print" class="btn primary grow">Print all</button>
+      <button id="btn-print" class="btn primary grow" aria-live="polite">
+        <span class="btn-fill" id="print-fill"></span>
+        <span class="btn-label" id="print-label">Print all</span>
+      </button>
     </div>
   </footer>
 

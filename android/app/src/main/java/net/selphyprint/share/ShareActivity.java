@@ -29,6 +29,7 @@ import java.util.UUID;
 public class ShareActivity extends Activity {
 
   private TextView status;
+  private ProgressBar bar;
 
   @Override
   protected void onCreate(Bundle savedInstanceState) {
@@ -40,8 +41,13 @@ public class ShareActivity extends Activity {
     int pad = dp(28);
     root.setPadding(pad, pad, pad, pad);
     root.setBackgroundColor(Color.parseColor("#16181d"));
-    ProgressBar bar = new ProgressBar(this);
-    root.addView(bar);
+    // Horizontal determinate bar so each image shows real byte progress.
+    bar = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
+    bar.setMax(100);
+    bar.setIndeterminate(true);
+    LinearLayout.LayoutParams barLp =
+        new LinearLayout.LayoutParams(dp(240), LinearLayout.LayoutParams.WRAP_CONTENT);
+    root.addView(bar, barLp);
     status = new TextView(this);
     status.setText("Sending to printer queue…");
     status.setTextColor(Color.parseColor("#eef0f4"));
@@ -97,10 +103,16 @@ public class ShareActivity extends Activity {
 
       try (OutputStream out = conn.getOutputStream()) {
         int n = 0;
+        final int count = uris.size();
         for (Uri uri : uris) {
           n++;
-          final String msg = "Uploading " + n + " / " + uris.size() + "…";
-          runOnUiThread(() -> status.setText(msg));
+          final int idx = n;
+          final long size = querySize(uri);
+          runOnUiThread(() -> {
+            bar.setIndeterminate(size <= 0);
+            if (size > 0) bar.setProgress(0);
+            status.setText("Uploading " + idx + " / " + count + "…");
+          });
           String name = displayName(uri, "photo-" + n + ".jpg");
           String type = getContentResolver().getType(uri);
           if (type == null) type = "image/jpeg";
@@ -112,10 +124,27 @@ public class ShareActivity extends Activity {
           try (InputStream in = getContentResolver().openInputStream(uri)) {
             byte[] buf = new byte[64 * 1024];
             int read;
-            while (in != null && (read = in.read(buf)) > 0) out.write(buf, 0, read);
+            long written = 0;
+            int lastPct = -1;
+            while (in != null && (read = in.read(buf)) > 0) {
+              out.write(buf, 0, read);
+              written += read;
+              if (size > 0) {
+                int pct = (int) (written * 100 / size);
+                if (pct != lastPct) {
+                  lastPct = pct;
+                  final int shown = pct;
+                  runOnUiThread(() -> {
+                    bar.setProgress(shown);
+                    status.setText("Uploading " + idx + " / " + count + " — " + shown + "%");
+                  });
+                }
+              }
+            }
           }
           out.write("\r\n".getBytes(StandardCharsets.UTF_8));
         }
+        runOnUiThread(() -> status.setText("Finishing…"));
         out.write(("--" + boundary + "--\r\n").getBytes(StandardCharsets.UTF_8));
       }
 
@@ -133,6 +162,17 @@ public class ShareActivity extends Activity {
     } catch (Exception e) {
       fail(e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage());
     }
+  }
+
+  private long querySize(Uri uri) {
+    try (Cursor c = getContentResolver().query(uri, null, null, null, null)) {
+      if (c != null && c.moveToFirst()) {
+        int idx = c.getColumnIndex(OpenableColumns.SIZE);
+        if (idx >= 0 && !c.isNull(idx)) return c.getLong(idx);
+      }
+    } catch (Exception ignored) {
+    }
+    return -1;
   }
 
   private String displayName(Uri uri, String fallback) {

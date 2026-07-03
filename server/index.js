@@ -147,6 +147,35 @@ const CPNP_PCT = {
   'pass:finalizing': 96, done: 100,
 };
 
+// Human-friendly phase text for the client. Keeps the dye-sub pass COLORS the
+// user watches for (yellow → magenta → cyan → overcoat) and fleshes out the
+// quick handshake so rendering/spool time isn't a blank "printing…".
+const CPNP_LABEL = {
+  session: 'Connecting to printer…',
+  connecting: 'Opening session…',
+  start: 'Starting job…',
+  spool: 'Spooling image to printer…',
+  data: 'Sending image to printer…',
+  'pass:paper pick': 'Picking up paper…',
+  'pass:initializing': 'Warming up…',
+  'pass:yellow (heating)': 'Yellow pass — heating…',
+  'pass:yellow': 'Printing yellow',
+  'pass:magenta (heating)': 'Magenta pass — heating…',
+  'pass:magenta': 'Printing magenta',
+  'pass:cyan (heating)': 'Cyan pass — heating…',
+  'pass:cyan': 'Printing cyan',
+  'pass:overcoat (heating)': 'Overcoat — heating…',
+  'pass:overcoat': 'Applying overcoat',
+  'pass:finalizing': 'Finishing…',
+  done: 'Done',
+};
+function cpnpLabel(s) {
+  if (CPNP_LABEL[s]) return CPNP_LABEL[s];
+  // 'waiting: <reason>' (paper-out pause, etc.) → surface the reason.
+  if (s.startsWith('waiting:')) return 'Paused — ' + s.slice(9);
+  return s.replace(/^pass:/, '');
+}
+
 /* ---------- API ---------- */
 
 app.get('/api/config', async () => ({
@@ -334,7 +363,7 @@ app.post('/api/print', async (req, reply) => {
 
   const job = enqueue(async (job) => {
     job.state = 'rendering';
-    job.stateText = 'processing image…';
+    job.stateText = 'Rendering image…';
     job.progress = 1;
 
     if (transport === 'cpnp') {
@@ -346,13 +375,13 @@ app.post('/api/print', async (req, reply) => {
       const host = new URL(printerUrl()).hostname;
       for (let i = 0; i < copies; i++) {
         job.state = 'printing';
-        job.stateText = copies > 1 ? `printing ${i + 1}/${copies}…` : 'printing…';
+        job.stateText = copies > 1 ? `Printing copy ${i + 1}/${copies}…` : 'Sending to printer…';
         await cpnpPrint(host, jpeg, {
           width: cv.h, // portrait after rotate
           height: cv.w,
           imageOptimize, // firmware 'color correct' — printer-side, no ICC
           onState: (s) => {
-            job.stateText = 'printer: ' + s.replace(/^pass:/, '');
+            job.stateText = cpnpLabel(s);
             const p = CPNP_PCT[s];
             // spread each sheet's 0-100 across its slice of the copy run
             if (p != null) job.progress = Math.max(job.progress, Math.round(((i + p / 100) / copies) * 100));
@@ -466,7 +495,7 @@ app.post('/api/calibrate', async () => {
         width: config.paper.canvas.h,
         height: config.paper.canvas.w,
         onState: (s) => {
-          job.stateText = 'printer: ' + s.replace(/^pass:/, '');
+          job.stateText = cpnpLabel(s);
           const p = CPNP_PCT[s];
           if (p != null) job.progress = Math.max(job.progress, p);
         },

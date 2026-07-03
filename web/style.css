@@ -316,6 +316,71 @@ body {
   100% { transform: translateX(275%); }
 }
 
+/* ---------- Print button doubles as the progress bar ---------- */
+#btn-print { position: relative; overflow: hidden; }
+#btn-print .btn-label { position: relative; z-index: 1; }
+#btn-print .btn-fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 0;
+  z-index: 0;
+  background: rgba(255, 255, 255, 0.3);
+  transition: width 0.4s ease;
+  pointer-events: none;
+}
+/* Stay vivid while printing even though the button is disabled. */
+#btn-print.printing { opacity: 1; }
+/* Indeterminate (rendering/handshake): a shimmer sweeps across the button. */
+#btn-print.printing .btn-fill.indet {
+  width: 100%;
+  background: linear-gradient(90deg, transparent 20%, rgba(255, 255, 255, 0.38) 50%, transparent 80%);
+  background-size: 220% 100%;
+  animation: btn-shimmer 1.15s linear infinite;
+}
+@keyframes btn-shimmer {
+  from { background-position: 130% 0; }
+  to { background-position: -130% 0; }
+}
+
+/* ---------- session print history ---------- */
+#history {
+  margin: 28px 4px 120px;
+  padding-top: 18px;
+  border-top: 1px solid var(--line);
+}
+#history h2 {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+  margin: 0 0 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.hist-list { display: flex; flex-direction: column; gap: 8px; }
+.hist-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 10px;
+  border-radius: var(--r-sm);
+  background: var(--surface);
+  border: 1px solid var(--line);
+}
+.hist-thumb {
+  width: 52px; height: 35px; flex: none;
+  border-radius: 6px; object-fit: cover;
+  background: #12141a;
+}
+.hist-meta { flex: 1; min-width: 0; }
+.hist-name {
+  font-size: 13px; font-weight: 500;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.hist-sub { font-size: 11.5px; color: var(--muted); margin-top: 2px; }
+.hist-status { font-size: 12px; font-weight: 600; flex: none; }
+.hist-status.done { color: var(--ok); }
+.hist-status.error { color: var(--err); }
+
 /* ---------- action bar ---------- */
 #actionbar {
   position: fixed;

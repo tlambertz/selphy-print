@@ -173,11 +173,45 @@ function populateColorChips() {
 // crop.scale = crop window width in image px (zoom), rotate = 0|90|180|270.
 const queue = new Map();
 let printing = false;
+// Session-only print history (most-recent first, cleared on reload).
+const history = [];
 
 const $ = (id) => document.getElementById(id);
 const grid = $('grid');
 const emptyState = $('empty-state');
 const actionbar = $('actionbar');
+
+/* The "Print all" button doubles as the progress bar while a job runs: the
+   label shows the phase/percent and a fill grows across it. It lives in the
+   fixed action bar, so updating it never reflows the queue (no thumbnail jump).
+   Pass null to reset the button to its idle "Print all" state. */
+function setPrintProgress(opts) {
+  const btn = $('btn-print');
+  if (!btn) return;
+  const fill = $('print-fill');
+  const label = $('print-label');
+  // Fall back to the button's own text if the label span is missing (e.g. a
+  // stale cached index.html paired with a fresh app.js) — never crash printing.
+  const setText = (t) => {
+    if (label) label.textContent = t;
+    else btn.textContent = t;
+  };
+  if (!opts) {
+    btn.classList.remove('printing');
+    fill?.classList.remove('indet');
+    if (fill) fill.style.width = '0';
+    setText('Print all');
+    return;
+  }
+  const { label: text = '', pct = null } = opts;
+  btn.classList.add('printing');
+  const indet = pct == null;
+  if (fill) {
+    fill.classList.toggle('indet', indet);
+    fill.style.width = indet ? '' : Math.max(2, Math.min(100, pct)) + '%';
+  }
+  setText(text);
+}
 
 /* ---------- boot ---------- */
 
@@ -347,6 +381,7 @@ async function loadInbox() {
     queue.set(rec.id, {
       id: rec.id,
       blob: rec.blob,
+      name: rec.name || 'photo',
       url: URL.createObjectURL(rec.blob),
       // Edit settings persisted per record (survive refresh); defaults if unset.
       crop: rec.crop || null, // {cx,cy,scale} or null = centered cover crop
@@ -376,6 +411,7 @@ function render() {
   for (const item of items) {
     const card = document.createElement('div');
     card.className = 'card';
+    card.dataset.id = item.id;
     // Thumbnail shows exactly what prints: the crop, rotation and (if set) the
     // white border — not the raw upload.
     const canvas = document.createElement('canvas');
@@ -406,18 +442,10 @@ function render() {
     });
     card.appendChild(rm);
 
+    // Per-card state label (spinner for 'printing') — absolute-positioned, so it
+    // never changes card height. The determinate bar now lives in the Print
+    // button (setPrintProgress), which updates without re-rendering cards.
     if (item.state !== 'ready') {
-      // Top progress bar for active jobs — determinate from the printer's pass
-      // (CPNP), else an indeterminate sweep.
-      if (item.state === 'queued' || item.state === 'rendering' || item.state === 'printing') {
-        const bar = document.createElement('div');
-        bar.className = 'progress' + (item.progress ? '' : ' indet');
-        const fill = document.createElement('div');
-        fill.className = 'progress-fill';
-        if (item.progress) fill.style.width = item.progress + '%';
-        bar.appendChild(fill);
-        card.appendChild(bar);
-      }
       const st = document.createElement('div');
       st.className = 'state ' + item.state;
       st.textContent = item.stateText || item.state;
@@ -826,19 +854,65 @@ function closeEditor() {
 
 /* ---------- printing ---------- */
 
+// POST a print job reporting upload progress. fetch() can't surface upload
+// progress at all; XMLHttpRequest.upload can, which is what drives the
+// "Sending… NN%" phase.
+function xhrPrint(form, onUpload) {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', 'api/print');
+    xhr.upload.onprogress = (e) => {
+      if (e.lengthComputable) onUpload(e.loaded / e.total);
+    };
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        try {
+          resolve(JSON.parse(xhr.responseText));
+        } catch {
+          reject(new Error('bad server response'));
+        }
+      } else {
+        reject(new Error(xhr.responseText || xhr.statusText || `HTTP ${xhr.status}`));
+      }
+    };
+    xhr.onerror = () => reject(new Error('network error during upload'));
+    xhr.send(form);
+  });
+}
+
+// Update one card's state label in place — no grid rebuild, so nothing reflows.
+function updateCardState(item) {
+  const card = grid.querySelector(`.card[data-id="${CSS.escape(String(item.id))}"]`);
+  if (!card) return;
+  let st = card.querySelector('.state');
+  if (item.state === 'ready') {
+    st?.remove();
+    return;
+  }
+  if (!st) {
+    st = document.createElement('div');
+    card.appendChild(st);
+  }
+  st.className = 'state ' + item.state;
+  st.textContent = item.stateText || item.state;
+}
+
 async function printAll() {
   if (printing || queue.size === 0) return;
   printing = true;
   $('btn-print').disabled = true;
 
+  const pending = [...queue.values()].filter((it) => it.state !== 'done');
+  const total = pending.length;
   let failed = 0;
+  let n = 0;
 
-  for (const item of queue.values()) {
-    if (item.state === 'done') continue;
+  for (const item of pending) {
+    n++;
+    const tag = total > 1 ? `${n}/${total} · ` : '';
     item.state = 'printing';
     item.stateText = 'sending…';
-    item.progress = 0;
-    render();
+    updateCardState(item);
     try {
       const crop = await cropForPrint(item);
       const form = new FormData();
@@ -857,24 +931,29 @@ async function printAll() {
           brightness: brightnessVal(),
         })
       );
-      const res = await fetch('api/print', { method: 'POST', body: form });
-      if (!res.ok) throw new Error((await res.text()) || res.statusText);
-      const { jobId } = await res.json();
+      setPrintProgress({ label: `${tag}Sending… 0%`, pct: 0 });
+      const { jobId } = await xhrPrint(form, (frac) =>
+        setPrintProgress({ label: `${tag}Sending… ${Math.round(frac * 100)}%`, pct: frac * 100 })
+      );
       item.stateText = 'printing…';
-      render();
-      await waitForJob(jobId, item);
+      updateCardState(item);
+      setPrintProgress({ label: `${tag}Printing…`, pct: null });
+      await waitForJob(jobId, item, tag);
       item.state = 'done';
       item.stateText = 'printed';
-      item.progress = 100;
+      updateCardState(item);
+      await pushHistory(item, 'done');
       await inboxDelete([item.id]);
     } catch (err) {
       failed++;
       item.state = 'error';
       item.stateText = String(err.message || err).slice(0, 80);
+      updateCardState(item);
+      await pushHistory(item, 'error');
     }
-    render();
   }
 
+  setPrintProgress(null);
   printing = false;
   $('btn-print').disabled = false;
   toast(failed ? `${failed} print(s) failed — tap a photo for details` : 'All prints sent 🎉');
@@ -882,10 +961,77 @@ async function printAll() {
   for (const [id, item] of [...queue.entries()]) {
     if (item.state === 'done') {
       URL.revokeObjectURL(item.url);
+      item._bmp?.close?.();
       queue.delete(id);
     }
   }
   render();
+}
+
+// Session print history (in-memory; cleared on reload). Thumb is captured now,
+// while the blob is still around, so it survives the item being removed.
+async function pushHistory(item, status) {
+  let thumb = '';
+  try {
+    const c = document.createElement('canvas');
+    c.width = 156;
+    c.height = 105; // 1.48 postcard aspect
+    await paintThumb(c, item);
+    thumb = c.toDataURL('image/jpeg', 0.72);
+  } catch {
+    /* no thumb → row still renders */
+  }
+  history.unshift({
+    thumb,
+    name: item.name || 'photo',
+    copies: item.copies || 1,
+    status,
+    time: new Date(),
+  });
+  if (history.length > 30) history.length = 30;
+  renderHistory();
+}
+
+function renderHistory() {
+  const el = $('history');
+  if (!history.length) {
+    el.hidden = true;
+    return;
+  }
+  el.hidden = false;
+  el.textContent = '';
+  const h2 = document.createElement('h2');
+  h2.textContent = 'This session';
+  el.appendChild(h2);
+  const list = document.createElement('div');
+  list.className = 'hist-list';
+  for (const h of history) {
+    const row = document.createElement('div');
+    row.className = 'hist-item';
+    const img = document.createElement('img');
+    img.className = 'hist-thumb';
+    img.alt = '';
+    if (h.thumb) img.src = h.thumb;
+    row.appendChild(img);
+    const meta = document.createElement('div');
+    meta.className = 'hist-meta';
+    const name = document.createElement('div');
+    name.className = 'hist-name';
+    name.textContent = h.name;
+    const sub = document.createElement('div');
+    sub.className = 'hist-sub';
+    const t = h.time.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    sub.textContent = t + (h.copies > 1 ? ` · ${h.copies} copies` : '');
+    meta.appendChild(name);
+    meta.appendChild(sub);
+    row.appendChild(meta);
+    const stat = document.createElement('div');
+    stat.className = 'hist-status ' + h.status;
+    stat.textContent = h.status === 'done' ? 'printed' : 'failed';
+    row.appendChild(stat);
+    list.appendChild(row);
+  }
+  el.appendChild(list);
 }
 
 // Compute the crop rect in *original image* pixel coords (before rotation),
@@ -910,7 +1056,7 @@ async function cropForPrint(item) {
   return rect;
 }
 
-async function waitForJob(jobId, item) {
+async function waitForJob(jobId, item, tag = '') {
   for (let i = 0; i < 900; i++) {
     const res = await fetch(`api/jobs/${jobId}`);
     if (!res.ok) throw new Error('lost track of job');
@@ -918,9 +1064,14 @@ async function waitForJob(jobId, item) {
     if (job.state === 'done') return;
     if (job.state === 'error') throw new Error(job.error || 'print failed');
     item.stateText = job.stateText || 'printing…';
-    if (typeof job.progress === 'number') item.progress = job.progress;
-    render();
-    await new Promise((r) => setTimeout(r, 1500));
+    updateCardState(item);
+    // Global bar: determinate once the printer reports pass progress (CPNP),
+    // else an indeterminate sweep while rendering/handshaking.
+    const pct = typeof job.progress === 'number' && job.progress > 0 ? job.progress : null;
+    setPrintProgress({ label: tag + (job.stateText || 'Printing…'), pct });
+    // Poll fairly briskly so the quick handshake phases (session/spool/data)
+    // and pass transitions are actually visible, not skipped over.
+    await new Promise((r) => setTimeout(r, 800));
   }
   throw new Error('timed out waiting for printer');
 }
