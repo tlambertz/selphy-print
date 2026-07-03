@@ -1,3 +1,7 @@
 .gradle/
 build/
 local.properties
+
+# signing key — generated on first build, never commit
+keystore.jks
+*.jks

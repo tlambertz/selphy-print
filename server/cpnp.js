@@ -340,25 +340,6 @@ function makeStartSpool(jpegSize, { border = false, imageOptimize = false, typeP
   return b;
 }
 
-function makeTransferHeader(chunk, offset, total, w, h, jpegSize, opts = {}) {
-  const { typePrint = 0, typeJpeg = 0 } = opts;
-  const b = Buffer.alloc(104);
-  le(b, 0, 2, typePrint);
-  le(b, 2, 2, CODE.printDataTransfer); // code = 1
-  le(b, 4, 4, 104 + chunk.length); // commandDataSize
-  le(b, 8, 4, typeJpeg); // printDataType
-  le(b, 12, 2, 1); // totalJpegImages
-  le(b, 14, 2, CP_POST_SIZE); // printSize
-  le(b, 16, 4, 1); // jpegImageNo
-  le(b, 20, 4, jpegSize); // jpegDataSize (whole image)
-  le(b, 24, 4, w); // jpegWidth
-  le(b, 28, 4, h); // jpegHeight
-  le(b, 32, 1, 0); // overcoatSetting
-  le(b, 96, 4, offset); // partialJpegOffset
-  le(b, 100, 4, chunk.length); // partialJpegSize
-  return b;
-}
-
 // Control packets (endPrint, executeSpoolPrint, cancel…) are 64 bytes
 // (CPNPMakedata `size`), not the 104-byte transfer-header size.
 function makeSimple(code, { typePrint = 0 } = {}) {

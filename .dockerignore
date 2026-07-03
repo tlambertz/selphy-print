@@ -1,0 +1,21 @@
+# Build context only needs package manifests + server/ + web/ (see Dockerfile).
+node_modules
+npm-debug.log
+.git
+.gitignore
+.dockerignore
+Dockerfile
+docker-compose.yml
+android
+test
+docs
+scripts
+profiles
+print-archive
+result
+flake.nix
+flake.lock
+*.md
+*.log
+.claude
+.audit

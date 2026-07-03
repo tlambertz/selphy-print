@@ -2,6 +2,35 @@ plugins {
   id 'com.android.application'
 }
 
+// Release signing. The keystore is NOT committed (it's a private key); it is
+// generated on first build below so a fresh clone builds with zero setup. Each
+// clone therefore gets its own key — APKs built from different clones won't
+// install as updates over one another. To keep a stable identity (e.g. so your
+// rebuilt APKs update an already-installed one), keep your generated
+// android/keystore.jks and reuse it, or point at your own via the properties
+// below (set them in ~/.gradle/gradle.properties or as env vars).
+def keystoreFile = rootProject.file('keystore.jks')
+def storePass = findProperty('SELPHY_STORE_PASSWORD') ?: System.getenv('SELPHY_STORE_PASSWORD') ?: 'selphy-print'
+def keyAliasName = findProperty('SELPHY_KEY_ALIAS') ?: System.getenv('SELPHY_KEY_ALIAS') ?: 'selphy'
+def keyPass = findProperty('SELPHY_KEY_PASSWORD') ?: System.getenv('SELPHY_KEY_PASSWORD') ?: 'selphy-print'
+
+// Auto-generate a self-signed keystore on first build if none exists yet.
+if (!keystoreFile.exists()) {
+  println "selphy-print: no keystore at ${keystoreFile} — generating a fresh signing key"
+  exec {
+    commandLine 'keytool',
+      '-genkeypair',
+      '-keystore', keystoreFile.absolutePath,
+      '-storepass', storePass,
+      '-keypass', keyPass,
+      '-alias', keyAliasName,
+      '-keyalg', 'RSA',
+      '-keysize', '2048',
+      '-validity', '10000',
+      '-dname', 'CN=Selphy Print, OU=selphy-print, O=selphy-print, C=US'
+  }
+}
+
 android {
   namespace 'net.selphyprint.share'
   compileSdk 35
@@ -16,10 +45,10 @@ android {
 
   signingConfigs {
     release {
-      storeFile file("../keystore.jks")
-      storePassword "selphy-print"
-      keyAlias "selphy"
-      keyPassword "selphy-print"
+      storeFile keystoreFile
+      storePassword storePass
+      keyAlias keyAliasName
+      keyPassword keyPass
     }
   }
 

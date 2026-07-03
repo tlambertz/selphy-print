@@ -3,11 +3,6 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import Fastify from 'fastify';
 import sharp from 'sharp';
-
-// The print head's native grid: 11.835 px/mm (≈300.6 dpi) — JPEG-path
-// renders and their calibration rulers live on it; raster formats declare
-// plain 300 dpi in their headers and keep that grid.
-const DEVICE_DPI = 11.835 * 25.4;
 import fastifyStatic from '@fastify/static';
 import fastifyMultipart from '@fastify/multipart';
 import { config, printerUrl } from './config.js';
@@ -15,6 +10,11 @@ import { getPrinterAttributes, getJobAttributes, printJob } from './ipp.js';
 import { renderForPrint, renderCalibration } from './render.js';
 import { encodePwg, encodeUrf } from './pwg.js';
 import { cpnpPrint } from './cpnp.js';
+
+// The print head's native grid: 11.835 px/mm (≈300.6 dpi) — JPEG-path
+// renders and their calibration rulers live on it; raster formats declare
+// plain 300 dpi in their headers and keep that grid.
+const DEVICE_DPI = 11.835 * 25.4;
 
 const RASTER = {
   pwg: { mime: 'image/pwg-raster', encode: encodePwg },

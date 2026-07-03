@@ -7,14 +7,25 @@
     "test": "test"
   },
   "scripts": {
-    "test": "node test/render.test.mjs && node test/ipp.test.mjs",
+    "test": "node test/render.test.mjs && node test/ipp.test.mjs && node test/pwg.test.mjs",
     "start": "node server/index.js",
     "e2e": "node test/e2e.test.mjs",
     "fetch-profile": "bash scripts/fetch-profile.sh"
   },
-  "keywords": [],
+  "keywords": [
+    "canon",
+    "selphy",
+    "cp1500",
+    "printer",
+    "pwa",
+    "icc",
+    "color-management",
+    "borderless",
+    "dye-sublimation",
+    "cpnp"
+  ],
   "author": "",
-  "license": "ISC",
+  "license": "MIT",
   "type": "module",
   "dependencies": {
     "@fastify/multipart": "^10.0.0",

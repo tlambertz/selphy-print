@@ -5,51 +5,53 @@ proper ICC color management. Install it on Android, share photos to it from your
 gallery (single or bulk), crop them to the printer's real geometry, and print.
 
 ```
-Android share sheet ──► PWA (crop UI, queue) ──► Node server ──► ICC convert ──► IPP ──► CP1500
+Android share sheet ──► PWA (crop UI, queue) ──► Node server ──► ICC convert ──► CPNP ──► CP1500
 ```
 
 ## Why this exists
 
-- **The "borders thing":** over IPP, the borderless postcard page is
-  100×148 mm = 1181×1748 px @300 dpi — but the print head images a larger
-  canvas (1248×1872 px, 105.7×158.5 mm; Gutenprint `print-dyesub.c`), and the
-  firmware *unconditionally enlarges* every borderless page onto it. That
-  enlargement cannot be bypassed over IPP (custom media caps at 102×153 mm),
-  so the outer few mm of any borderless print never land on paper.
-
+- **The "borders thing":** borderless on the CP1500 is genuinely hard. The
+  print head images a canvas *larger* than the paper — 1248×1872 px
+  (105.7×158.5 mm; Gutenprint `print-dyesub.c`) versus the 100×148 mm postcard —
+  and the firmware unconditionally enlarges every borderless job onto it, so
+  the outer few mm never land on paper. Over standard IPP you can't tame that.
   Measured on a real CP1500 (fw 1.0.6.0), the hard way:
 
-  - **JPEG jobs are a firmware black box.** `print-scaling` is advertised
-    but absent from `job-creation-attributes-supported` and provably
-    ignored; page-size, canvas-size (1248×1872) and oversize (3600×2400)
-    JPEGs all printed with identical placement — 1:1-ish with **white bars
-    at the short ends** — regardless of borderless `media-col`. Don't print
-    JPEG directly to this printer.
-  - **PWG raster is the path that behaves** (`document-format-preferred` is
-    its sibling URF; this is what AirPrint and CUPS driverless send). And
-    the community recipe holds: with the **plain media keyword** (not the
-    borderless variant) the firmware prints a full-page raster **1:1 with
-    no borderless enlargement** — deterministic geometry, only mechanical
-    registration (~1 mm) left over. The zero-margin borderless `media-col`
-    instead engages the firmware's ~7% enlargement ("borderless prints are
-    always cropped" complaints); this app defaults to plain + full-page
-    raster (`PRINT_FORMAT=pwg`, `MEDIA_VARIANT=plain`).
+  - **JPEG over IPP is a firmware black box.** `print-scaling` is advertised
+    but absent from `job-creation-attributes-supported` and provably ignored;
+    page-size, canvas-size and oversize JPEGs all printed with identical
+    placement — 1:1-ish with **white bars at the short ends** — regardless of
+    the borderless `media-col`.
+  - **PWG raster is rejected** by the CP1500 and **URF prints bordered** — both
+    are experiments-only dead ends here.
+  - **CPNP is the path that works.** This is Canon's own protocol (what SELPHY
+    Photo Layout speaks; reverse-engineered in
+    [`docs/cpnp-protocol.md`](docs/cpnp-protocol.md)). The firmware
+    aspect-**fill**-scales the JPEG onto the full 1248×1872 head canvas and
+    centers it on the sheet — true overscan borderless — and it's the **only**
+    transport that can invoke the printer's own Auto Image Correction. It also
+    reports per-pass progress, decoded errors, and paper-out pause/resume.
 
-  This app renders your crop as a full-page 300 dpi raster and
-  **pre-compensates the measured residual trim**: your crop is rendered into the calibrated surviving window of the
-  page and the doomed outer zone is filled with mirrored bleed. Net result:
-  the frame you set in the crop UI is what lands on paper, edge to edge,
-  within the printer's ~±1 mm mechanical feed tolerance (shown as a thin
-  guide line). Calibrate once per unit with the in-app **calibration page**
-  (mm rulers + T/B/L/R letters, printed deliberately *without* compensation
-  so it measures the raw firmware behavior); theory predicts 2.7–3.3 mm per
-  100 mm-side and ~4.9 mm per 148 mm-end, community measurements span
-  2.5–4.5 / 4–6 mm, and opposite edges genuinely differ (feed offset) —
-  hence per-edge values.
+  So the app defaults to CPNP (`PRINT_FORMAT=cpnp`) and renders your crop at
+  **exactly** the 1248×1872 head canvas, making the firmware's scale factor
+  1.0 — deterministic geometry with no printer-side rescale guesswork. The
+  structural canvas overhang (≈5 mm per short end, less on the long sides) is
+  bleed that always runs off the paper or onto the tear-off stubs; the crop UI
+  visualizes it and **pre-compensates the small measured per-edge trim** from
+  calibration. Net result: the frame you set in the crop UI is what lands on
+  paper, edge to edge, within the printer's ~±1 mm mechanical feed tolerance
+  (shown as a thin guide line). Calibrate once per unit with the in-app
+  **calibration page** (mm rulers + T/B/L/R letters, printed deliberately
+  *without* compensation so it measures raw firmware behavior). Opposite edges
+  genuinely differ (~1–2 mm feed offset), hence per-edge values.
 - **Color:** the CP1500 has a fixed internal color pipeline that cannot be
-  disabled and tends to oversaturate with a bluish cast. The server converts
-  every image into a printer ICC profile (which characterizes that whole
-  pipeline) before sending, so prints come out color-accurate.
+  disabled and tends to oversaturate with a bluish cast. Each photo gets a
+  **color mode** (chosen per-image in the crop editor): convert into a printer
+  **ICC profile** that characterizes that whole pipeline (accurate color),
+  hand color to the printer's own **firmware auto-correct** (Canon's "color
+  correct", CPNP-only), or **off** (raw sRGB). Multiple profiles can be
+  installed and switched between, with an optional per-photo brightness curve,
+  and a no-paper **Preview** that renders the exact bytes the printer will get.
 
 ## Quick start (dev)
 
@@ -60,6 +62,10 @@ PRINTER_HOST=192.168.1.42 ICC_PROFILE=$PWD/profiles/CP1500-farbenwerk.icc npm st
 # open http://localhost:8080
 ```
 
+Needs `tificc` (from `liblcms2-utils`) on `PATH` for ICC conversion — the
+Docker image and Nix package bundle it; for local dev, install it (Debian:
+`apt install liblcms2-utils`).
+
 ## Deploying
 
 The app must be served over **HTTPS with a browser-trusted certificate**,
@@ -67,6 +73,23 @@ otherwise Android will not install the PWA and the share-sheet integration
 (`share_target`) will not register. Point your reverse proxy at the server's
 plain-HTTP port. No special headers needed; allow request bodies up to ~64 MB
 for bulk shares (nginx: `client_max_body_size 64m;`).
+
+### Docker
+
+`liblcms2-utils` (for `tificc`) is baked into the image; `sharp` ships its own
+libvips, so there's nothing else to install.
+
+```bash
+# edit docker-compose.yml — set PRINTER_HOST and the ICC profile path
+docker compose up -d --build
+```
+
+The image runs as the non-root `node` user and exposes a `HEALTHCHECK` that
+polls `/api/config`. Mount your ICC profile read-only (the compose file does
+this from `./profiles`); optionally bind-mount `/app/print-archive` to keep a
+copy of every print. To reach the printer by its `CP1500xxxxxx.local` mDNS name
+instead of an IP, set `network_mode: host` (bridged networking can't resolve
+`.local`).
 
 ### NixOS (flake)
 
@@ -87,23 +110,25 @@ services.selphy-print = {
 The package uses `buildNpmPackage` with `npmDepsHash = lib.fakeHash`; the first
 build aborts printing the real hash — paste it into `flake.nix` once.
 
-### Docker
-
-Edit `docker-compose.yml` (printer IP), then `docker compose up -d`.
-
 ## Configuration (environment variables)
 
-| Variable        | Default      | Meaning |
+| Variable        | Default            | Meaning |
 |---|---|---|
-| `PRINTER_HOST`  | *(required)* | CP1500 IP or mDNS hostname (`CP1500xxxxxx.local`) |
-| `PRINTER_URL`   | –            | Full IPP URL override (default `ipp://HOST:631/ipp/print`) |
-| `ICC_PROFILE`   | *(none)*     | Absolute path to the printer ICC profile; unset = no color management |
-| `ICC_INTENT`    | `perceptual` | `perceptual` (smooth, saturated photos) or `relative` (accurate in-gamut, + black point compensation) |
+| `PRINTER_HOST`  | *(required)*       | CP1500 IP or mDNS hostname (`CP1500xxxxxx.local`) |
+| `PRINTER_URL`   | `ipp://HOST:631/ipp/print` | Full IPP URL override (only the IPP/JPEG transports use it) |
+| `PRINT_FORMAT`  | `cpnp`             | Transport. `cpnp` = true borderless + firmware color (default); `jpeg`/`urf`/`pwg` are experiments only |
+| `MEDIA_VARIANT` | `borderless`       | `borderless` (full-bleed canvas) or `plain` (1:1 on bare paper; IPP path only) |
+| `ICC_PROFILE`   | *(none)*           | Absolute path to the printer ICC profile; unset = no color management |
+| `ICC_DIR`       | `./profiles`       | Directory scanned for selectable `*.icc` profiles (client picks per print) |
+| `ICC_INTENT`    | `relative`         | `relative` (accurate in-gamut, + black-point compensation), `perceptual`, `saturation`, `absolute` |
+| `JPEG_QUALITY`  | `100`              | Quality of the JPEG sent to the printer (near-lossless on the LAN) |
+| `OVERSCAN_MM`   | *(measured/calibrated)* | Per-edge trim `"top,bottom,left,right"` in mm (crop-editor orientation; matches the calibration page's T/B/L/R letters) |
+| `BLUE_MM`       | `2,2`              | Calibration visual only: width of the blue overscan band per short end (mm) |
+| `PAPER`         | `postcard`         | Paper/geometry preset (KP-108IN postcard) |
+| `PRINT_ARCHIVE_DIR` | `./print-archive` | Where each print is archived (original + rendered); `off` disables it |
+| `MAX_UPLOAD_MB` | `64`               | Max upload size for bulk shares |
 | `PORT` / `HOST` | `8080` / `0.0.0.0` | Listen address |
-| `PRINT_SCALING` | `none`       | IPP print-scaling; images are sent at exactly page size so `none` = 1:1 placement |
-| `OVERSCAN_MM`   | –            | Per-edge safe-area insets `"top,bottom,left,right"` in mm (crop-editor orientation, matches the calibration page's T/B/L/R letters) |
-| `OVERSCAN_SIDES_MM` / `OVERSCAN_ENDS_MM` | `3.5` / `5.5` | Symmetric fallback when `OVERSCAN_MM` is unset |
-| `JPEG_QUALITY`  | `95`         | Quality of the JPEG sent to the printer |
+| `LOG_LEVEL`     | `info`             | Fastify log level |
 
 ## Printer setup (once)
 
@@ -151,7 +176,7 @@ WebAPK would have been (a tiny APK with a share intent-filter), just built
 locally instead of by Google:
 
 1. On the phone, open the web app → printer status pill → *install the tiny
-   companion app* (serves `selphy-share.apk`, ~26 kB, built from
+   companion app* (serves `selphy-share.apk`, ~29 kB, built from
    [`android/`](android/), no dependencies, no Google).
 2. Open it once and set the server URL.
 3. Share images (single or bulk) from any app → **Selphy Print** appears in
@@ -162,15 +187,24 @@ You can still "Add to Home screen" from Firefox/Vanadium for a launcher icon;
 crop UI and printing work in any browser — only share-sheet registration
 needs the companion.
 
-Rebuild the APK: `cd android && ANDROID_HOME=<sdk> gradle assembleRelease`,
-output lands in `android/app/build/outputs/apk/release/`; copy it to
-`web/selphy-share.apk`. The signing keystore (`android/keystore.jks`,
-passwords in `app/build.gradle`) is committed so rebuilt APKs install as
-updates — replace it if your repo is public.
-3. A single shared photo opens the crop editor directly; bulk shares land in
-   the queue — tap any photo to adjust its crop, rotation, or copy count.
-4. If you ever change `share_target` in the manifest, uninstall and reinstall
-   the PWA (Android caches it aggressively).
+### Building the companion APK
+
+`cd android && ANDROID_HOME=<sdk> gradle assembleRelease`; the output lands in
+`android/app/build/outputs/apk/release/` — copy it to `web/selphy-share.apk`.
+
+The signing keystore (`android/keystore.jks`) is a private key and is **not**
+committed. The first build generates a fresh self-signed one automatically
+(needs `keytool` from the JDK on your `PATH`). That keystore stays local: keep
+and reuse it so your rebuilt APKs install as updates over each other. A
+different clone generates a different key, so its APKs won't update yours — if
+you want a stable identity across machines, copy your `keystore.jks` over or
+pin your own via `SELPHY_STORE_PASSWORD`, `SELPHY_KEY_ALIAS`,
+`SELPHY_KEY_PASSWORD` (gradle properties or env). The in-repo default passwords
+are dev-only and harmless without the (uncommitted) keystore.
+
+> If you change `share_target` in the manifest, uninstall and reinstall the PWA
+> (Android caches it aggressively). A single shared photo opens the crop editor
+> directly; bulk shares land in the queue.
 
 ## Crop UI
 
@@ -182,7 +216,7 @@ updates — replace it if your repo is public.
   (2.5 mm sides / 3.7 mm ends) instead of full bleed — nothing is trimmed in
   that mode.
 - **Where the trimmed content physically goes** (postcard paper is
-  100×177 mm before you tear off the perforated stubs on the short ends):
+  100×178 mm before you tear off the perforated stubs on the short ends):
   the end-overflow (editor left/right) prints *onto the tear-off stubs*, so
   you see it until you tear them — while the side-overflow (editor
   top/bottom) is sprayed past the paper's long edges inside the printer and
@@ -192,29 +226,57 @@ updates — replace it if your repo is public.
   **T/B/L/R** (hold it so T reads on top — that matches the crop editor's
   orientation). On the short ends, read the tick **at the tear-off
   perforation**, not at the stub's outer edge. The first readable tick next
-  to each letter is your unit's
-  real trim on that edge; enter the four values in the same sheet (stored per
-  device in the browser and sent with every print job; server-wide defaults
-  via `OVERSCAN_MM`). From then on every borderless print is pre-compensated
-  with those values. Opposite edges genuinely differ (~1–2 mm feed offset),
-  which is why calibration is per edge. The calibration page itself always
-  prints uncompensated, so re-measuring stays meaningful.
+  to each letter is your unit's real trim on that edge; enter the four values
+  in the same sheet (stored per device in the browser and sent with every
+  print job; server-wide defaults via `OVERSCAN_MM`). From then on every
+  borderless print is pre-compensated with those values. Opposite edges
+  genuinely differ (~1–2 mm feed offset), which is why calibration is per
+  edge. The calibration page itself always prints uncompensated, so
+  re-measuring stays meaningful.
 
 ## Color notes
 
-- The bundled fetch script grabs the free
-  [farbenwerk CP1500 profile](https://www.farbenwerk.com/en/blogs/news/canon-selphy-cp1500-icc-profile).
-  Alternatives: [Zygomatic Color's free CP-series sample](https://zm-color.com/post/2020/05/13/for-canon-selphy-cp-series-sample-icc-profile/),
+- The bundled fetch script grabs two free profiles — the
+  [farbenwerk CP1500 profile](https://www.farbenwerk.com/en/blogs/news/canon-selphy-cp1500-icc-profile)
+  (neutral) and the [objektiv-guide CP1500 profile](https://www.objektiv-guide.de/)
+  (more saturated). Drop any `*.icc` into `profiles/` (or point `ICC_DIR`
+  elsewhere) and it becomes selectable per photo. Other options:
+  [Zygomatic Color's free CP-series sample](https://zm-color.com/post/2020/05/13/for-canon-selphy-cp-series-sample-icc-profile/),
   paid CP1500 profiles from hkphoto.com, or a custom-made profile for your
   exact paper batch (best).
-- Pipeline: embedded profile honored (sRGB assumed if untagged) → converted to
-  the printer profile via littleCMS (`jpgicc`, with black point compensation) →
-  sent untagged, since the printer assumes sRGB and its own correction is
-  already baked into the profile.
+- ICC pipeline: embedded profile honored (sRGB assumed if untagged) → converted
+  to the printer profile via littleCMS `tificc` on lossless pixels (relative
+  colorimetric + black-point compensation by default, see `ICC_INTENT`), then
+  encoded as a single baseline 4:4:4 JPEG → sent **untagged**, since the printer
+  assumes sRGB and its own correction is already baked into the profile.
+  (`tificc`, not `jpgicc`: `jpgicc` re-encodes at 4:2:0 with no way to stop it,
+  discarding chroma the head can't recover.)
+- **Firmware auto-correct** mode sends no ICC — it just sets the CPNP
+  `imageOptimize` flag so the printer does its own content-adaptive correction
+  (the Preview shows the un-optimized image, since that adjustment happens
+  in-printer and can't be reproduced client-side).
 
 ## Tests
 
 ```bash
-npm test    # render pipeline + IPP client against ippeveprinter (needs cups-ipp-utils)
+npm test    # render pipeline + IPP + PWG encoders against ippeveprinter (needs cups-ipp-utils)
 npm run e2e # headless-Chrome test of the full UI flow (needs puppeteer dev dep)
 ```
+
+## Acknowledgements
+
+Canon's CPNP transport is undocumented; this project's implementation
+(`server/cpnp.js`, notes in [`docs/cpnp-protocol.md`](docs/cpnp-protocol.md))
+was reconstructed by analysing Canon's **SELPHY Photo Layout** Android app and
+cross-checking against prior open-source work, which was invaluable:
+
+- [**selphy_print**](https://git.shaftnet.org/gitea/slp/selphy_print) by
+  Solomon Peachy — the CUPS backend for Canon SELPHY printers (incl. the
+  CPNP/"CPneo" series).
+- [**selphy_go**](https://github.com/tbleher/selphy_go) by tbleher — a Go
+  implementation of the CPNP print flow.
+- The free CP1500 ICC profiles from
+  [farbenwerk](https://www.farbenwerk.com/en/blogs/news/canon-selphy-cp1500-icc-profile)
+  and [objektiv-guide](https://www.objektiv-guide.de/).
+
+Geometry facts also draw on the Gutenprint `print-dyesub.c` dye-sub driver.

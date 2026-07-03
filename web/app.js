@@ -809,7 +809,7 @@ async function printAll() {
           // per-device calibration → the server pre-compensates the render
           overscan: effectiveOverscan(),
           colorMode: item.color ?? colorDefault(),
-      brightness: brightnessVal(),
+          brightness: brightnessVal(),
         })
       );
       const res = await fetch('api/print', { method: 'POST', body: form });

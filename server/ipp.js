@@ -265,20 +265,24 @@ function opAttrs(printerUrl, extra = {}) {
 export const STATUS = (code) =>
   code <= 0x0005 ? 'successful' : `ipp-error-0x${code.toString(16).padStart(4, '0')}`;
 
-export async function getPrinterAttributes(printerUrl, timeoutMs = 5000) {
+// requested: array of attribute keywords to ask for. Defaults to the small set
+// the UI needs; pass ['all'] to dump the printer's entire self-description
+// (every *-supported attribute) — IPP's option auto-discovery mechanism.
+const DEFAULT_PRINTER_ATTRS = [
+  'printer-name',
+  'printer-state',
+  'printer-state-reasons',
+  'printer-make-and-model',
+  'media-ready',
+  'marker-levels',
+  'marker-names',
+];
+export async function getPrinterAttributes(printerUrl, timeoutMs = 5000, requested = DEFAULT_PRINTER_ATTRS) {
   const body = encodeRequest('Get-Printer-Attributes', nextRequestId++, [
     {
       tag: TAG.operation,
       attrs: opAttrs(printerUrl, {
-        'requested-attributes': [
-          { type: 'keyword', value: 'printer-name' },
-          { type: 'keyword', value: 'printer-state' },
-          { type: 'keyword', value: 'printer-state-reasons' },
-          { type: 'keyword', value: 'printer-make-and-model' },
-          { type: 'keyword', value: 'media-ready' },
-          { type: 'keyword', value: 'marker-levels' },
-          { type: 'keyword', value: 'marker-names' },
-        ],
+        'requested-attributes': requested.map((value) => ({ type: 'keyword', value })),
       }),
     },
   ]);

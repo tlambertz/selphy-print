@@ -60,8 +60,8 @@ const PAPERS = {
     sheet: { mm: { w: 178, h: 100 }, stubMm: 15 },
     // IPP page raster @300dpi — the render target for borderless
     page: { w: 1748, h: 1181 },
-    // Full head canvas (Gutenprint print-dyesub.c). MEASURED on hardware
-    // (2026-07-02, CPNP calibration prints): the CP1500 firmware
+    // Full head canvas (Gutenprint print-dyesub.c). Measured on hardware
+    // (CPNP calibration prints): the CP1500 firmware
     // aspect-FILL-scales any CPNP JPEG onto this canvas and centers it on
     // the physical sheet (a 1232×1800 test printed its 50 mm bars at 52 mm
     // = 1872/1800 exactly). Sending exactly this size ⇒ scale 1.0, fully
@@ -107,7 +107,7 @@ function parseOverscan() {
     if ([top, bottom, left, right].every(isFinite)) return { top, bottom, left, right };
     throw new Error('OVERSCAN_MM must be four numbers: "top,bottom,left,right"');
   }
-  // Measured on the reference CP1500 (calibration sheet, 2026-07-02):
+  // Measured on the reference CP1500 (calibration sheet):
   // top/bottom land exactly on the paper edge; the left mapping overshoots
   // its perforation by 0.5 mm (negative = window extends past the photo
   // boundary), the right falls 1 mm short of its perforation.
@@ -128,7 +128,7 @@ function parseBlueWidth() {
     if ([left, right].every(isFinite)) return { left, right };
     throw new Error('BLUE_MM must be two numbers: "left,right"');
   }
-  // measured on the reference CP1500 (calibration sheet, 2026-07-02):
+  // measured on the reference CP1500 (calibration sheet):
   // ~2 mm of blue visible on each end.
   return { left: 2, right: 2 };
 }
