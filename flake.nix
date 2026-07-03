@@ -18,8 +18,11 @@
           version = "0.1.0";
           src = ./.;
 
-          # First build will fail and print the real hash — paste it here.
-          npmDepsHash = pkgs.lib.fakeHash;
+          npmDepsHash = "sha256-PKnUvDsyN1j8YEwwHibnu7X+RmOQdnOpJOKR88OfB1w=";
+
+          # puppeteer (dev-only, for e2e) would try to download Chrome during
+          # install, which fails in the sandbox — skip it; e2e isn't run here.
+          PUPPETEER_SKIP_DOWNLOAD = 1;
 
           dontNpmBuild = true;
 
