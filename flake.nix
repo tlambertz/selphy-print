@@ -20,9 +20,10 @@
 
           npmDepsHash = "sha256-PKnUvDsyN1j8YEwwHibnu7X+RmOQdnOpJOKR88OfB1w=";
 
-          # puppeteer (dev-only, for e2e) would try to download Chrome during
-          # install, which fails in the sandbox — skip it; e2e isn't run here.
-          PUPPETEER_SKIP_DOWNLOAD = 1;
+          # Runtime needs prod deps only; skipping devDependencies also avoids
+          # puppeteer's install hook (it would try to download Chrome, which
+          # fails in the sandbox). e2e/tests aren't run in the Nix build.
+          npmInstallFlags = [ "--omit=dev" ];
 
           dontNpmBuild = true;
 
