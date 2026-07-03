@@ -188,7 +188,7 @@ app.get('/api/printer', async () => {
  * - raster (pwg/urf): the 300 dpi page raster.
  * - ipp-jpeg with plain media: the bare paper rect (canonPage).
  * Bordered mode adds a ~2.5 mm side / 3.7 mm end white frame. */
-function buildRenderPlan(options) {
+function buildRenderPlan(options, format = config.printFormat) {
   const borderless = !options.border;
   // Per-edge borderless trim in page-mm: the client sends its calibrated
   // values (per-device localStorage); fall back to the server defaults.
@@ -198,7 +198,7 @@ function buildRenderPlan(options) {
     // negative = the mapping overshoots the paper boundary on that edge
     overscanMm[edge] = isFinite(v) && v >= -5 && v <= 12 ? v : config.overscan[edge];
   }
-  const raster = RASTER[config.printFormat];
+  const raster = RASTER[format];
   // mm → px: JPEG targets live on the device grid (11.835 px/mm); raster
   // targets on the IPP-standard 300 dpi grid.
   const pxPerMm = raster ? 300 / 25.4 : 11.835;
@@ -211,7 +211,7 @@ function buildRenderPlan(options) {
   const FRAME = { top: 30, bottom: 30, left: 44, right: 44 }; // bordered white
 
   let target, outBleed;
-  if (config.printFormat === 'cpnp' || (!raster && config.mediaVariant === 'borderless')) {
+  if (format === 'cpnp' || (!raster && config.mediaVariant === 'borderless')) {
     const st = config.paper.canvasBleed; // landscape: ends=left/right
     target = config.paper.canvas;
     outBleed = {
@@ -246,6 +246,31 @@ function resolveIcc(options) {
   return { profile: entry.path, intent: config.icc.intent, quality: config.icc.quality };
 }
 
+// A job picks ONE mutually-exclusive color mode via options.colorMode:
+//   'firmware'      → hand color to the printer (Auto Image Correction ON, the
+//                     Canon app's "color correct"); no ICC pre-compensation.
+//   'off' | ''      → no color management at all (raw sRGB, optimize OFF).
+//   <profile id>    → convert into that ICC profile; optimize stays OFF so the
+//                     profile characterizes a deterministic printer path.
+// Returns { icc, imageOptimize } — the two levers are never both on: choosing an
+// ICC forces firmware optimize off, and firmware mode skips the ICC. Falls back
+// to the legacy options.iccProfile for older clients (always optimize OFF).
+function resolveColor(options) {
+  const mode = options.colorMode ?? options.iccProfile;
+  if (mode === 'firmware') return { icc: {}, imageOptimize: true };
+  return { icc: resolveIcc({ ...options, iccProfile: mode }), imageOptimize: false };
+}
+
+// Transport chosen per job. CPNP is the default (true full-bleed borderless).
+// Firmware color-correct only exists on CPNP, so firmware mode forces it even
+// if the server is configured for an IPP format. Explicit raster formats
+// (pwg/urf) are honored except when firmware correction is requested.
+function effectiveFormat(options) {
+  const mode = options.colorMode ?? options.iccProfile;
+  if (mode === 'firmware') return 'cpnp';
+  return config.printFormat;
+}
+
 // Brightness as a modulate multiplier from options.brightness (percent, e.g.
 // +20 → 1.20). Clamped to ±60%; 1 = neutral.
 function brightnessFactor(options) {
@@ -277,10 +302,12 @@ app.post('/api/print', async (req, reply) => {
   if (!imageBuf) return reply.code(400).send('missing image');
 
   const copies = Math.min(Math.max(parseInt(options.copies, 10) || 1, 1), 99);
-  // ICC is on unless the client explicitly opts out (color A/B testing).
-  const icc = resolveIcc(options);
+  // One mutually-exclusive color mode: an ICC profile, the printer's own
+  // firmware auto-correct, or nothing. (Old clients: ICC on unless opted out.)
+  const { icc, imageOptimize } = resolveColor(options);
+  const transport = effectiveFormat(options);
   const brightness = brightnessFactor(options);
-  const plan = buildRenderPlan(options);
+  const plan = buildRenderPlan(options, transport);
   const rotate = [0, 90, 180, 270].includes(options.rotate) ? options.rotate : 0;
   const crop = options.crop || null;
   const originalFmt = (await sharp(imageBuf).metadata().catch(() => ({}))).format;
@@ -289,7 +316,7 @@ app.post('/api/print', async (req, reply) => {
     job.state = 'rendering';
     job.stateText = 'processing image…';
 
-    if (config.printFormat === 'cpnp') {
+    if (transport === 'cpnp') {
       const cv = config.paper.canvas;
       const jpeg = await renderForPrint(imageBuf, {
         crop, rotate, target: plan.target, bleed: plan.bleed, padWhite: plan.padWhite, icc, brightness, output: 'jpeg',
@@ -302,6 +329,7 @@ app.post('/api/print', async (req, reply) => {
         await cpnpPrint(host, jpeg, {
           width: cv.h, // portrait after rotate
           height: cv.w,
+          imageOptimize, // firmware 'color correct' — printer-side, no ICC
           onState: (s) => { job.stateText = 'printer: ' + s; },
         });
       }
@@ -313,7 +341,7 @@ app.post('/api/print', async (req, reply) => {
       output: plan.raster ? 'raw' : 'jpeg',
     });
     if (plan.raster) {
-      const r = RASTER[config.printFormat];
+      const r = RASTER[transport];
       const archiveJpeg = await sharp(rendered.rgb, { raw: { width: rendered.width, height: rendered.height, channels: 3 } })
         .jpeg({ quality: 95, chromaSubsampling: '4:4:4' })
         .toBuffer();
@@ -341,9 +369,12 @@ app.post('/api/preview', async (req, reply) => {
   }
   if (!imageBuf) return reply.code(400).send('missing image');
 
-  const icc = resolveIcc(options);
+  // Firmware mode has no ICC, so the preview shows the un-optimized image — the
+  // printer's adaptive correction can't be reproduced client-side (see the note
+  // in the editor). ICC/off modes preview exactly.
+  const { icc } = resolveColor(options);
   const brightness = brightnessFactor(options);
-  const plan = buildRenderPlan(options);
+  const plan = buildRenderPlan(options, effectiveFormat(options));
   const rotate = [0, 90, 180, 270].includes(options.rotate) ? options.rotate : 0;
   // Render to raw pixels (lossless; ICC via tificc) and encode the preview
   // ONCE, at the same near-lossless q100/4:4:4 as the print — otherwise a

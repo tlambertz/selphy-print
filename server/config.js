@@ -164,18 +164,18 @@ export const config = {
 
   /* Transport, learned the hard way on real hardware (and re-learned twice:
    * measure ink against the PERFORATIONS, and the two JPEG paths differ):
-   * - 'jpeg' (DEFAULT): plain IPP Print-Job with image/jpeg. The firmware
-   *   aspect-FITS the image onto the paper/page area, centered, NO canvas
-   *   overscan (measured: canvas padding printed as visible inset borders).
-   *   Render at the page with only the registration bleed → edge-to-edge
-   *   within ±1 mm feed tolerance.
-   * - 'cpnp' = Canon's own protocol. The firmware aspect-FILL-scales onto
-   *   the full 1248×1872 head canvas (ink a few mm past the tear lines —
-   *   true overscan borderless). Render at the canvas, scale 1.0. Extras:
-   *   per-pass progress, decoded errors, paper-out pause/resume.
+   * - 'cpnp' (DEFAULT) = Canon's own protocol. The firmware aspect-FILL-scales
+   *   onto the full 1248×1872 head canvas (ink a few mm past the tear lines —
+   *   true overscan borderless), and it's the ONLY transport that can invoke
+   *   the printer's firmware color-correct (Auto Image Correction). Extras:
+   *   per-pass progress, decoded errors, paper-out pause/resume. Firmware
+   *   color mode forces this transport per job regardless of the setting.
+   * - 'jpeg': plain IPP Print-Job with image/jpeg. The firmware aspect-FITS the
+   *   image onto the paper/page area, NO canvas overscan (measured: canvas
+   *   padding printed as visible inset borders), and no firmware color hook.
    * - 'urf'/'pwg' raster paths: URF prints bordered, PWG is rejected —
    *   experiments only. */
-  printFormat: env.PRINT_FORMAT || 'jpeg',
+  printFormat: env.PRINT_FORMAT || 'cpnp',
   // 'borderless' (default): zero-margin media-col — the firmware maps the
   // JPEG onto its overscan rect, so renders are canvas-size with structural
   // bleed (true full bleed; feed offset buried in overscan, like CPNP).

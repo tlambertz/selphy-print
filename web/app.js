@@ -27,7 +27,7 @@ let blueWidth = { left: 2, right: 2 };
 // Transport geometry: overscanning modes (cpnp; ipp jpeg with the
 // borderless media variant) put ink a few mm past the tear line; plain ipp
 // jpeg aspect-fits the paper rect (ink stops ≈ at the tear line).
-let printFormat = 'jpeg';
+let printFormat = 'cpnp';
 let mediaVariant = 'borderless';
 
 const OVERSCAN_KEY = 'selphy-overscan-v4';
@@ -50,17 +50,52 @@ function effectiveBlueWidth() {
     : blueWidth;
 }
 
-// ICC color management: on by default when the server has a profile; the user
-// pick which one (or Off) per device, applied to prints and the Preview.
+// Color mode: ONE mutually-exclusive choice per device — 'firmware' (let the
+// printer auto-correct, like the Canon app's "color correct"), '' (off), or an
+// ICC profile id. Applied to prints and the crop Preview. (Stored under the
+// legacy ICC key so existing device settings carry over.)
 let iccProfiles = []; // [{id,name}] from the server
 let iccDefault = null; // server default id
 const ICC_KEY = 'selphy-icc-profile';
-// Returns the chosen profile id to send as options.iccProfile: '' = off, an id,
-// or the server default when the user hasn't chosen.
-function iccChoice() {
+const FIRMWARE = 'firmware';
+// The value sent as options.colorMode: 'firmware', '' (off), an id, or the
+// server default when the user hasn't chosen.
+function colorChoice() {
   const saved = localStorage.getItem(ICC_KEY);
   if (saved !== null) return saved;
   return iccDefault || '';
+}
+// Short chip label for a mode value.
+function colorLabel(value) {
+  if (value === FIRMWARE) return 'Canon firmware';
+  if (value === '' || value === 'none') return 'Off';
+  const p = iccProfiles.find((p) => p.id === value);
+  // profile names like "CP1500-farbenwerk" → "farbenwerk" for a compact chip
+  return p ? (p.name.split(/[-_]/).pop() || p.name) : value;
+}
+// Ordered list of selectable modes: firmware first, then each ICC profile,
+// then off — exactly the "Canon firmware, ICC A, ICC B" spectrum.
+function colorModes() {
+  const modes = [
+    { value: FIRMWARE, label: 'Canon firmware', title: 'Let the printer auto-correct color in firmware (the Canon app’s "color correct"). No ICC — preview shows the un-optimized image.' },
+  ];
+  for (const p of iccProfiles) {
+    modes.push({ value: p.id, label: colorLabel(p.id), title: 'ICC profile: ' + p.name + (p.id === iccDefault ? ' (default)' : '') + '. Firmware auto-correct is turned off so the profile stays deterministic.' });
+  }
+  modes.push({ value: '', label: 'Off', title: 'No color management: raw sRGB, firmware auto-correct off.' });
+  return modes;
+}
+// Keep both surfaces (editor chips + settings dropdown) reflecting the choice.
+function syncColorControls() {
+  populateColorChips();
+  const sel = $('opt-icc');
+  if (sel && sel.options.length) sel.value = colorChoice();
+}
+// Persist a new mode and refresh UI; re-render an open preview so A/B is live.
+function setColorMode(value) {
+  localStorage.setItem(ICC_KEY, value);
+  syncColorControls();
+  if (ed && !$('preview-modal').hidden) showPreview();
 }
 // Brightness (percent, per device): brightens before ICC. 0 = neutral.
 const BRIGHT_KEY = 'selphy-brightness';
@@ -77,19 +112,43 @@ function populateIccSelect() {
   const sel = $('opt-icc');
   const note = $('icc-note');
   sel.innerHTML = '';
-  if (!iccProfiles.length) {
-    sel.add(new Option('No profiles found', ''));
-    sel.disabled = true;
-    note.textContent = 'No ICC profiles on the server — drop .icc files in the profiles/ folder and restart.';
-    return;
-  }
   sel.disabled = false;
-  sel.add(new Option('Off — no color management', ''));
+  // Canon firmware works with zero profiles; ICC choices need profiles present.
+  sel.add(new Option('Canon firmware (printer auto-correct)', FIRMWARE));
   for (const p of iccProfiles) {
-    sel.add(new Option(p.name + (p.id === iccDefault ? ' (default)' : ''), p.id));
+    sel.add(new Option('ICC · ' + p.name + (p.id === iccDefault ? ' (default)' : ''), p.id));
   }
-  sel.value = iccChoice();
-  note.textContent = 'Applies to prints and the crop Preview, so you can A/B the color.';
+  sel.add(new Option('Off — no color management', ''));
+  sel.value = colorChoice();
+  note.textContent = iccProfiles.length
+    ? 'One color mode per print (also drives the crop Preview): Canon firmware lets the printer auto-correct; an ICC profile pre-compensates instead. Picking one turns the other off.'
+    : 'No ICC profiles on the server — drop .icc files in the profiles/ folder and restart. Canon firmware auto-correct still works.';
+}
+
+// Editor chip row mirroring the settings dropdown — the color spectrum right
+// where you crop. One active at a time (mutually exclusive by construction).
+function populateColorChips() {
+  const wrap = $('ed-color');
+  if (!wrap) return;
+  const active = colorChoice();
+  wrap.innerHTML = '';
+  for (const m of colorModes()) {
+    const btn = document.createElement('button');
+    btn.className = 'btn chip color-chip';
+    btn.dataset.color = m.value;
+    btn.textContent = m.label;
+    btn.title = m.title;
+    btn.setAttribute('aria-pressed', String(m.value === active));
+    wrap.appendChild(btn);
+  }
+  const note = $('ed-color-note');
+  if (note) {
+    note.textContent =
+      active === FIRMWARE
+        ? 'Printer optimizes color in firmware (prints via CPNP) — preview shows the un-optimized image.'
+      : active === '' || active === 'none' ? 'No color management — preview is exact.'
+      : 'ICC “' + colorLabel(active) + '” — preview is exact.';
+  }
 }
 
 // Queue items: { id, blob, url, bitmap?, crop: {cx, cy, scale, rotate}, copies, state }
@@ -257,6 +316,7 @@ async function fetchConfig() {
     if (cfg.icc) { iccProfiles = cfg.icc.profiles || []; iccDefault = cfg.icc.defaultId || null; }
     if (cfg.printFormat) printFormat = cfg.printFormat;
     if (cfg.mediaVariant) mediaVariant = cfg.mediaVariant;
+    syncColorControls(); // profiles just arrived — refresh chips/dropdown
   } catch {}
 }
 
@@ -399,6 +459,7 @@ async function openEditor(item) {
   };
   editor.hidden = false;
   syncBorderBtn();
+  populateColorChips();
   layoutEditor();
   if (!ed.crop) ed.crop = defaultCrop();
   clampCrop();
@@ -623,7 +684,12 @@ $('ed-copies-plus').addEventListener('click', () => {
   $('ed-copies').textContent = ed.copies + '×';
 });
 $('opt-icc').addEventListener('change', (e) => {
-  localStorage.setItem(ICC_KEY, e.target.value);
+  setColorMode(e.target.value);
+});
+// Editor color chips (event-delegated; rebuilt on every open).
+$('ed-color').addEventListener('click', (e) => {
+  const btn = e.target.closest('.color-chip');
+  if (btn) setColorMode(btn.dataset.color);
 });
 $('opt-bright').addEventListener('input', (e) => {
   localStorage.setItem(BRIGHT_KEY, e.target.value);
@@ -654,7 +720,7 @@ async function showPreview() {
       rotate: ed.rotate,
       border: ed.border,
       overscan: effectiveOverscan(),
-      iccProfile: iccChoice(),
+      colorMode: colorChoice(),
       brightness: brightnessVal(),
     }));
     const res = await fetch('api/preview', { method: 'POST', body: form });
@@ -724,7 +790,7 @@ async function printAll() {
           border: !!item.border,
           // per-device calibration → the server pre-compensates the render
           overscan: effectiveOverscan(),
-          iccProfile: iccChoice(),
+          colorMode: colorChoice(),
       brightness: brightnessVal(),
         })
       );
