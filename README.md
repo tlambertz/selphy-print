@@ -10,40 +10,53 @@ Android share sheet ──► PWA (crop UI, queue) ──► Node server ──�
 
 ## Why this exists
 
-- **The "borders thing":** borderless on the CP1500 is genuinely hard. The
-  print head images a canvas *larger* than the paper — 1248×1872 px
-  (105.7×158.5 mm; Gutenprint `print-dyesub.c`) versus the 100×148 mm postcard —
-  and the firmware unconditionally enlarges every borderless job onto it, so
-  the outer few mm never land on paper. Over standard IPP you can't tame that.
-  Measured on a real CP1500 (fw 1.0.6.0), the hard way:
+- **The "borders thing":** borderless on the CP1500 is subtle, and most of
+  what's written about it (including earlier versions of this README) is
+  folklore. Here's what's actually going on. The print head images a canvas
+  *larger* than the photo area — 1248×1872 px (105.7×158.5 mm; Gutenprint
+  `print-dyesub.c`) versus the 100×148 mm postcard — so "borderless" means
+  filling that whole canvas, letting ink run to (and a few mm past) the
+  perforations. The physical KP-108IN sheet is 100×**178** mm: a 15 mm tear-off
+  stub beyond a perforation at each short end.
 
-  - **JPEG over IPP is a firmware black box.** `print-scaling` is advertised
-    but absent from `job-creation-attributes-supported` and provably ignored;
-    page-size, canvas-size and oversize JPEGs all printed with identical
-    placement — 1:1-ish with **white bars at the short ends** — regardless of
-    the borderless `media-col`.
-  - **PWG raster is rejected** by the CP1500 and **URF prints bordered** — both
-    are experiments-only dead ends here.
-  - **CPNP is the path that works.** This is Canon's own protocol (what SELPHY
-    Photo Layout speaks; reverse-engineered in
-    [`docs/cpnp-protocol.md`](docs/cpnp-protocol.md)). The firmware
-    aspect-**fill**-scales the JPEG onto the full 1248×1872 head canvas and
-    centers it on the sheet — true overscan borderless — and it's the **only**
-    transport that can invoke the printer's own Auto Image Correction. It also
-    reports per-pass progress, decoded errors, and paper-out pause/resume.
+  Measured directly on a real CP1500 (fw 1.0.6.0), correcting the myths:
 
-  So the app defaults to CPNP (`PRINT_FORMAT=cpnp`) and renders your crop at
-  **exactly** the 1248×1872 head canvas, making the firmware's scale factor
-  1.0 — deterministic geometry with no printer-side rescale guesswork. The
-  structural canvas overhang (≈5 mm per short end, less on the long sides) is
-  bleed that always runs off the paper or onto the tear-off stubs; the crop UI
-  visualizes it and **pre-compensates the small measured per-edge trim** from
+  - **A page-size raster under-fills — and that's the "white bars" myth.**
+    Render at the 148 mm page and the photo area prints 1:1, edge to edge, but
+    the outer few mm of each tear-off stub stay blank. That blank *stub* — not
+    a failed print — is the "white bars at the short ends" you'll see warned
+    about everywhere. You tear it off anyway.
+  - **`print-scaling=fill` genuinely enlarges ~7%.** Verified on hardware
+    (2026-07-03): a 50 mm reference bar on a page-size JPEG sent with
+    `print-scaling=fill` printed at **53.5 mm = ×1.0709 = exactly 1872/1748**.
+    So `fill` blows the 148 mm page up to the 158.5 mm canvas — real full bleed
+    past the perforations — but it **throws away ~3–5 mm of your image at every
+    edge** and softens everything through a 7% upscale.
+  - **Rendering at the canvas size gets the same bleed for free.** Draw the
+    image at exactly 1248×1872 and the head images it 1:1 (scale 1.0):
+    *identical* physical coverage to `fill` — ink to the perforations — but with
+    **no content loss and no interpolation**, because *you* control what fills
+    the few mm of overscan margin (mirrored bleed) instead of sacrificing photo
+    to it.
+
+  So the app renders every print at the **1248×1872 head canvas**, treating the
+  structural overhang (≈5 mm per short end, less on the long sides) as
+  controlled bleed, and pre-compensates the small measured per-edge trim from
   calibration. Net result: the frame you set in the crop UI is what lands on
   paper, edge to edge, within the printer's ~±1 mm mechanical feed tolerance
   (shown as a thin guide line). Calibrate once per unit with the in-app
   **calibration page** (mm rulers + T/B/L/R letters, printed deliberately
-  *without* compensation so it measures raw firmware behavior). Opposite edges
-  genuinely differ (~1–2 mm feed offset), hence per-edge values.
+  *without* compensation so it measures raw firmware behavior); opposite edges
+  differ (~1–2 mm feed offset), hence per-edge values.
+
+  The default transport is **CPNP** (Canon's own protocol — what SELPHY Photo
+  Layout speaks, reverse-engineered in
+  [`docs/cpnp-protocol.md`](docs/cpnp-protocol.md)). Its advantage is *not* the
+  geometry — the canvas-size trick above is what makes borderless clean. CPNP
+  is the default because it's the **only** transport that can invoke the
+  printer's own Auto Image Correction, and it reports per-pass progress, decoded
+  errors, and paper-out pause/resume. `PWG` raster is rejected by the CP1500 and
+  `URF` prints bordered — both experiments-only.
 - **Color:** the CP1500 has a fixed internal color pipeline that cannot be
   disabled and tends to oversaturate with a bluish cast. Each photo gets a
   **color mode** (chosen per-image in the crop editor): convert into a printer
