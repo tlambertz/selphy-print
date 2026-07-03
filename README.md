@@ -276,6 +276,13 @@ needs the companion.
 `cd android && ANDROID_HOME=<sdk> gradle assembleRelease`; the output lands in
 `android/app/build/outputs/apk/release/` — copy it to `web/selphy-share.apk`.
 
+The committed `web/selphy-share.apk` is the output of `nix build .#apk`. That
+build is **payload-reproducible**: the `classes.dex`, `AndroidManifest.xml`,
+`resources.arsc`, and metadata come out byte-for-byte identical on every build.
+The only thing that varies is the v2/v3 signing block, since each build mints a
+fresh self-signed key with a time-based cert (see keystore note below) — so the
+APK as a whole is not bit-identical, but everything except the signature is.
+
 The signing keystore (`android/keystore.jks`) is a private key and is **not**
 committed. The first build generates a fresh self-signed one automatically
 (needs `keytool` from the JDK on your `PATH`). That keystore stays local: keep
