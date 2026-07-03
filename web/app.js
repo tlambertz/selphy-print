@@ -50,20 +50,20 @@ function effectiveBlueWidth() {
     : blueWidth;
 }
 
-// Color mode: ONE mutually-exclusive choice per device — 'firmware' (let the
-// printer auto-correct, like the Canon app's "color correct"), '' (off), or an
-// ICC profile id. Applied to prints and the crop Preview. (Stored under the
-// legacy ICC key so existing device settings carry over.)
+// Color mode is PER IMAGE (like crop/rotate/border): 'firmware' (let the
+// printer auto-correct), '' (off), or an ICC profile id — stored on each queue
+// item as item.color. The Settings dropdown only sets the DEFAULT applied to
+// newly-added photos.
 let iccProfiles = []; // [{id,name}] from the server
 let iccDefault = null; // server default id
-const ICC_KEY = 'selphy-icc-profile';
+const COLOR_KEY = 'selphy-color-default'; // default color mode for NEW photos
+const LEGACY_COLOR_KEY = 'selphy-icc-profile'; // pre-per-image global value
 const FIRMWARE = 'firmware';
-// The value sent as options.colorMode: 'firmware', '' (off), an id, or the
-// server default when the user hasn't chosen.
-function colorChoice() {
-  const saved = localStorage.getItem(ICC_KEY);
-  if (saved !== null) return saved;
-  return iccDefault || '';
+// Default color mode for newly-added photos (set in Settings; falls back to the
+// old global value, then the server's default profile).
+function colorDefault() {
+  const saved = localStorage.getItem(COLOR_KEY) ?? localStorage.getItem(LEGACY_COLOR_KEY);
+  return saved !== null ? saved : (iccDefault || '');
 }
 // Short chip label for a mode value.
 function colorLabel(value) {
@@ -85,17 +85,19 @@ function colorModes() {
   modes.push({ value: '', label: 'Off', title: 'No color management: raw sRGB, firmware auto-correct off.' });
   return modes;
 }
-// Keep both surfaces (editor chips + settings dropdown) reflecting the choice.
+// Refresh both surfaces: editor chips reflect the CURRENT photo (ed.color); the
+// settings dropdown reflects the default for new photos.
 function syncColorControls() {
   populateColorChips();
   const sel = $('opt-icc');
-  if (sel && sel.options.length) sel.value = colorChoice();
+  if (sel && sel.options.length) sel.value = colorDefault();
 }
-// Persist a new mode and refresh UI; re-render an open preview so A/B is live.
-function setColorMode(value) {
-  localStorage.setItem(ICC_KEY, value);
-  syncColorControls();
-  if (ed && !$('preview-modal').hidden) showPreview();
+// Editor chip → set THIS photo's color; re-render an open preview so A/B is live.
+function setItemColor(value) {
+  if (!ed) return;
+  ed.color = value;
+  populateColorChips();
+  if (!$('preview-modal').hidden) showPreview();
 }
 // Brightness (percent, per device): brightens before ICC. 0 = neutral.
 const BRIGHT_KEY = 'selphy-brightness';
@@ -119,10 +121,10 @@ function populateIccSelect() {
     sel.add(new Option('ICC · ' + p.name + (p.id === iccDefault ? ' (default)' : ''), p.id));
   }
   sel.add(new Option('Off — no color management', ''));
-  sel.value = colorChoice();
+  sel.value = colorDefault();
   note.textContent = iccProfiles.length
-    ? 'One color mode per print (also drives the crop Preview): Canon firmware lets the printer auto-correct; an ICC profile pre-compensates instead. Picking one turns the other off.'
-    : 'No ICC profiles on the server — drop .icc files in the profiles/ folder and restart. Canon firmware auto-correct still works.';
+    ? 'Default for new photos. Each photo’s color is set per-image in the crop editor (chips under the photo) and shown in its Preview.'
+    : 'Default for new photos. No ICC profiles on the server — drop .icc files in profiles/ and restart. Canon firmware auto-correct still works.';
 }
 
 // Editor chip row mirroring the settings dropdown — the color spectrum right
@@ -130,7 +132,7 @@ function populateIccSelect() {
 function populateColorChips() {
   const wrap = $('ed-color');
   if (!wrap) return;
-  const active = colorChoice();
+  const active = ed ? ed.color : colorDefault();
   wrap.innerHTML = '';
   for (const m of colorModes()) {
     const btn = document.createElement('button');
@@ -334,6 +336,7 @@ async function loadInbox() {
       rotate: rec.rotate || 0,
       copies: rec.copies || 1,
       border: !!rec.border, // per-image white border (else edge-to-edge)
+      color: rec.color ?? colorDefault(), // per-image color mode
       state: 'ready',
     });
     addedIds.push(rec.id);
@@ -455,6 +458,7 @@ async function openEditor(item) {
     rotate: item.rotate,
     copies: item.copies,
     border: !!item.border,
+    color: item.color ?? colorDefault(),
     crop: item.crop ? { ...item.crop } : null,
   };
   editor.hidden = false;
@@ -683,13 +687,14 @@ $('ed-copies-plus').addEventListener('click', () => {
   ed.copies = Math.min(99, ed.copies + 1);
   $('ed-copies').textContent = ed.copies + '×';
 });
+// Settings dropdown sets the DEFAULT color mode for newly-added photos.
 $('opt-icc').addEventListener('change', (e) => {
-  setColorMode(e.target.value);
+  localStorage.setItem(COLOR_KEY, e.target.value);
 });
-// Editor color chips (event-delegated; rebuilt on every open).
+// Editor color chips set THIS photo's color (event-delegated; rebuilt on open).
 $('ed-color').addEventListener('click', (e) => {
   const btn = e.target.closest('.color-chip');
-  if (btn) setColorMode(btn.dataset.color);
+  if (btn) setItemColor(btn.dataset.color);
 });
 $('opt-bright').addEventListener('input', (e) => {
   localStorage.setItem(BRIGHT_KEY, e.target.value);
@@ -720,7 +725,7 @@ async function showPreview() {
       rotate: ed.rotate,
       border: ed.border,
       overscan: effectiveOverscan(),
-      colorMode: colorChoice(),
+      colorMode: ed.color,
       brightness: brightnessVal(),
     }));
     const res = await fetch('api/preview', { method: 'POST', body: form });
@@ -749,9 +754,10 @@ $('ed-done').addEventListener('click', () => {
   ed.item.rotate = ed.rotate;
   ed.item.copies = ed.copies;
   ed.item.border = ed.border;
-  // Persist so crop/orientation/copies/border survive a page refresh.
+  ed.item.color = ed.color;
+  // Persist so crop/orientation/copies/border/color survive a page refresh.
   inboxUpdate(ed.item.id, {
-    crop: ed.item.crop, rotate: ed.item.rotate, copies: ed.item.copies, border: ed.item.border,
+    crop: ed.item.crop, rotate: ed.item.rotate, copies: ed.item.copies, border: ed.item.border, color: ed.item.color,
   });
   closeEditor();
   render();
@@ -790,7 +796,7 @@ async function printAll() {
           border: !!item.border,
           // per-device calibration → the server pre-compensates the render
           overscan: effectiveOverscan(),
-          colorMode: colorChoice(),
+          colorMode: item.color ?? colorDefault(),
       brightness: brightnessVal(),
         })
       );
