@@ -35,6 +35,15 @@ const execFileP = promisify(execFile);
 //    risk a double-convert); ICC is pre-applied into the pixels via tificc.
 //  - 300 dpi JFIF density: cosmetic (the firmware scales by pixel count and
 //    ignores this) but correct for any other viewer of the same bytes.
+// 256-entry brightness curve: out = 255·(in/255)^(1/gamma). gamma>1 brightens
+// (shadows/midtones lift), gamma<1 darkens; 0 and 255 stay put (no clipping).
+function brightnessLut(gamma) {
+  const lut = new Uint8Array(256);
+  const inv = 1 / gamma;
+  for (let i = 0; i < 256; i++) lut[i] = Math.round(255 * Math.pow(i / 255, inv));
+  return lut;
+}
+
 async function encodeJpeg(pipeline, quality = 100) {
   const jpeg = await pipeline
     .jpeg({ quality, chromaSubsampling: '4:4:4', progressive: false })
@@ -148,11 +157,17 @@ export async function renderForPrint(input, opts) {
     .toBuffer();
   let portrait = sharp(page).rotate(90); // printer feeds portrait, short edge first
 
-  // Optional brightness tweak (multiplier, 1 = neutral), applied in sRGB before
-  // any ICC conversion — i.e. it brightens the image the profile then maps,
-  // exactly like nudging exposure in an editor. Covers all output paths.
-  const brightness = opts.brightness ?? 1;
-  if (brightness !== 1) portrait = portrait.modulate({ brightness });
+  // Optional brightness tweak, applied in sRGB before any ICC conversion (so it
+  // nudges the image the profile then maps, like exposure). It's a POWER CURVE,
+  // not a multiply: 0 and 255 are fixed points, so shadows/midtones lift but
+  // highlights don't blow out. opts.brightness = gamma (1 = neutral).
+  const gamma = opts.brightness ?? 1;
+  if (gamma !== 1) {
+    const lut = brightnessLut(gamma);
+    const { data, info } = await portrait.removeAlpha().raw().toBuffer({ resolveWithObject: true });
+    for (let i = 0; i < data.length; i++) data[i] = lut[data[i]];
+    portrait = sharp(data, { raw: { width: info.width, height: info.height, channels: info.channels } });
+  }
 
   if (opts.output === 'raw') {
     let tiff = await portrait.removeAlpha().tiff({ compression: 'none' }).toBuffer();
