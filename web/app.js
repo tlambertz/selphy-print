@@ -24,9 +24,21 @@ let overscan = { top: 0, bottom: 0, left: -0.5, right: 1 };
 // sheet (mm) — read straight off the sheet; drives the editor's tear-strip
 // zones. Ends only; the 100 mm sides have no stub (blue runs off, ~0 mm).
 let blueWidth = { left: 2, right: 2 };
-// White-border width (mm) for "White border" mode: sides = 100 mm edges
-// (top/bottom), ends = 148 mm edges (left/right). From /api/config (BORDER_MM).
-let borderMm = { sides: 2.5, ends: 3.7 };
+// White-border width in mm (uniform, all edges) for "White border" mode — the
+// server default from /api/config, overridable per device (Settings).
+let borderDefaultMm = 4;
+const BORDER_KEY = 'selphy-border-mm';
+function effectiveBorderMm() {
+  const v = parseFloat(localStorage.getItem(BORDER_KEY));
+  return isFinite(v) && v >= 0 && v <= 20 ? v : borderDefaultMm;
+}
+// Aspect the CROP targets: the paper for edge-to-edge, or the smaller area
+// inside the white border (so the photo fills it without distortion).
+function targetAspect(bordered) {
+  if (!bordered) return paperAspect();
+  const b = effectiveBorderMm();
+  return (paper.mm.w - 2 * b) / (paper.mm.h - 2 * b);
+}
 // Transport geometry: overscanning modes (cpnp; ipp jpeg with the
 // borderless media variant) put ink a few mm past the tear line; plain ipp
 // jpeg aspect-fits the paper rect (ink stops ≈ at the tear line).
@@ -257,6 +269,7 @@ $('printer-status').addEventListener('click', () => {
     ` · blue ${blueWidth.left}/${blueWidth.right} mm`;
   populateIccSelect();
   syncBright();
+  $('opt-border-mm').value = effectiveBorderMm();
   $('settings-printer').textContent = $('status-text').textContent;
   // load the calibration preview lazily, only when the sheet opens
   const img = document.querySelector('#cal-preview img');
@@ -318,7 +331,7 @@ async function fetchConfig() {
     if (cfg.paper) paper = cfg.paper;
     if (cfg.overscan) overscan = cfg.overscan;
     if (cfg.blueWidth) blueWidth = cfg.blueWidth;
-    if (cfg.border) borderMm = cfg.border;
+    if (isFinite(cfg.border)) borderDefaultMm = cfg.border;
     if (cfg.icc) { iccProfiles = cfg.icc.profiles || []; iccDefault = cfg.icc.defaultId || null; }
     if (cfg.printFormat) printFormat = cfg.printFormat;
     if (cfg.mediaVariant) mediaVariant = cfg.mediaVariant;
@@ -426,7 +439,7 @@ async function paintThumb(canvas, item) {
   const bmp = item._bmp || (item._bmp = await createImageBitmap(item.blob));
   const ctx = canvas.getContext('2d');
   const cw = canvas.width, ch = canvas.height;
-  const a = paperAspect();
+  const a = targetAspect(item.border);
   const rot = item.rotate || 0;
   const rw = rot % 180 === 0 ? bmp.width : bmp.height;
   const rh = rot % 180 === 0 ? bmp.height : bmp.width;
@@ -436,11 +449,11 @@ async function paintThumb(canvas, item) {
   else { sw = Math.min(rw, rh * a); sh = sw / a; cx = rw / 2; cy = rh / 2; }
 
   ctx.clearRect(0, 0, cw, ch);
-  // White border: inset by the configured mm per edge (ends = 148 mm edges,
-  // sides = 100 mm edges), white behind.
+  // White border: uniform mm inset on every edge, white behind (print preview).
   if (item.border) { ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, cw, ch); }
-  const dx = item.border ? (borderMm.ends / paper.mm.w) * cw : 0;
-  const dy = item.border ? (borderMm.sides / paper.mm.h) * ch : 0;
+  const b = effectiveBorderMm();
+  const dx = item.border ? (b / paper.mm.w) * cw : 0;
+  const dy = item.border ? (b / paper.mm.h) * ch : 0;
   const dw = cw - 2 * dx, dh = ch - 2 * dy;
 
   ctx.save();
@@ -497,10 +510,10 @@ function paperAspect() {
   return paper.page.w / paper.page.h; // landscape, e.g. 1748/1181 (= 148/100)
 }
 
-// Cover crop: largest paper-aspect window that fits in the image, centered.
+// Cover crop: largest window (at the target aspect) that fits the image, centered.
 function defaultCrop() {
   const img = rotatedSize();
-  const a = paperAspect();
+  const a = targetAspect(ed.border);
   let w = img.w;
   let h = w / a;
   if (h > img.h) {
@@ -512,7 +525,7 @@ function defaultCrop() {
 
 function clampCrop() {
   const img = rotatedSize();
-  const a = paperAspect();
+  const a = targetAspect(ed.border);
   const maxW = Math.min(img.w, img.h * a);
   ed.crop.scale = Math.min(Math.max(ed.crop.scale, maxW / 8), maxW);
   const w = ed.crop.scale;
@@ -595,29 +608,40 @@ function draw() {
   ctx.setTransform(devicePixelRatio, 0, 0, devicePixelRatio, 0, 0);
   ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-  // In white-border mode the photo maps to the area INSIDE the border; the
-  // frame ring is painted white. Otherwise the crop fills the whole frame.
+  // In white-border mode the photo maps to the area INSIDE the border (d);
+  // otherwise the crop fills the whole frame.
   let d = f;
   if (ed.border) {
-    const ix = borderMm.ends * (f.w / paper.mm.w); // 148 mm edges (left/right)
-    const iy = borderMm.sides * (f.h / paper.mm.h); // 100 mm edges (top/bottom)
+    const b = effectiveBorderMm();
+    const ix = b * (f.w / paper.mm.w);
+    const iy = b * (f.h / paper.mm.h);
     d = { x: f.x + ix, y: f.y + iy, w: f.w - 2 * ix, h: f.h - 2 * iy };
-    ctx.fillStyle = '#fff';
-    ctx.fillRect(f.x, f.y, f.w, f.h);
   }
 
+  // Draw the image (crop window → dest rect d). NOT clipped, so in border mode
+  // the surrounding photo stays visible in the border ring.
   const scale = d.w / ed.crop.scale; // screen px per image px
-  const h = ed.crop.scale / paperAspect();
+  const h = ed.crop.scale / targetAspect(ed.border);
   ctx.save();
-  if (ed.border) { ctx.beginPath(); ctx.rect(d.x, d.y, d.w, d.h); ctx.clip(); }
-  // Map image coords -> screen: crop window (cx,cy,scale) fills the dest rect.
   ctx.translate(d.x - (ed.crop.cx - ed.crop.scale / 2) * scale, d.y - (ed.crop.cy - h / 2) * scale);
   ctx.scale(scale, scale);
-  // Apply rotation about the rotated-image space.
   ctx.translate(img.w / 2, img.h / 2);
   ctx.rotate((ed.rotate * Math.PI) / 180);
   ctx.drawImage(ed.bitmap, -ed.bitmap.width / 2, -ed.bitmap.height / 2);
   ctx.restore();
+
+  // See-through white border: a translucent overlay on the ring (frame minus
+  // d), so you still see the image that the border will paint over.
+  if (ed.border) {
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(f.x, f.y, f.w, f.h);
+    ctx.rect(d.x, d.y, d.w, d.h);
+    ctx.clip('evenodd'); // the ring only
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.8)';
+    ctx.fillRect(f.x, f.y, f.w, f.h);
+    ctx.restore();
+  }
 }
 
 /* pointer interaction: drag to pan, pinch/wheel to zoom */
@@ -684,7 +708,7 @@ $('ed-rotate').addEventListener('click', () => {
 // inside the white border), edges flush, keeping the most of the photo.
 function fillMax() {
   const img = rotatedSize();
-  ed.crop.scale = Math.min(img.w, img.h * paperAspect()); // cover-crop scale
+  ed.crop.scale = Math.min(img.w, img.h * targetAspect(ed.border)); // cover-crop scale
   clampCrop();
   draw();
 }
@@ -698,6 +722,7 @@ function syncBorderBtn() {
 $('ed-border').addEventListener('click', () => {
   ed.border = !ed.border;
   syncBorderBtn();
+  clampCrop(); // the target aspect changed with the border — re-fit the crop
   draw();
 });
 $('ed-copies-minus').addEventListener('click', () => {
@@ -721,13 +746,21 @@ $('opt-bright').addEventListener('input', (e) => {
   localStorage.setItem(BRIGHT_KEY, e.target.value);
   $('opt-bright-val').textContent = (e.target.value > 0 ? '+' : '') + e.target.value + '%';
 });
+$('opt-border-mm').addEventListener('input', (e) => {
+  const v = parseFloat(e.target.value);
+  if (isFinite(v) && v >= 0 && v <= 20) {
+    localStorage.setItem(BORDER_KEY, String(v));
+    // Re-fit + redraw the open editor so a bordered photo updates live.
+    if (ed) { clampCrop(); draw(); }
+  }
+});
 
 // Crop rect (image fractions) for the LIVE editor state — mirrors cropForPrint.
 function currentCropRect() {
   clampCrop();
   const img = rotatedSize();
   const w = ed.crop.scale;
-  const h = w / paperAspect();
+  const h = w / targetAspect(ed.border);
   return { x: (ed.crop.cx - w / 2) / img.w, y: (ed.crop.cy - h / 2) / img.h, w: w / img.w, h: h / img.h };
 }
 
@@ -745,6 +778,7 @@ async function showPreview() {
       crop: currentCropRect(),
       rotate: ed.rotate,
       border: ed.border,
+      borderMm: effectiveBorderMm(),
       overscan: effectiveOverscan(),
       colorMode: ed.color,
       brightness: brightnessVal(),
@@ -816,6 +850,7 @@ async function printAll() {
           rotate: item.rotate,
           copies: item.copies,
           border: !!item.border,
+          borderMm: effectiveBorderMm(),
           // per-device calibration → the server pre-compensates the render
           overscan: effectiveOverscan(),
           colorMode: item.color ?? colorDefault(),
@@ -858,12 +893,12 @@ async function printAll() {
 async function cropForPrint(item) {
   const bitmap = await createImageBitmap(item.blob);
   const saved = ed;
-  ed = { bitmap, rotate: item.rotate, crop: item.crop ? { ...item.crop } : null };
+  ed = { bitmap, rotate: item.rotate, border: !!item.border, crop: item.crop ? { ...item.crop } : null };
   if (!ed.crop) ed.crop = defaultCrop();
   clampCrop();
   const img = rotatedSize();
   const w = ed.crop.scale;
-  const h = w / paperAspect();
+  const h = w / targetAspect(ed.border);
   const rect = {
     x: (ed.crop.cx - w / 2) / img.w,
     y: (ed.crop.cy - h / 2) / img.h,

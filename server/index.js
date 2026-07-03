@@ -223,11 +223,12 @@ function buildRenderPlan(options, format = config.printFormat) {
     left: Math.round(overscanMm.left * pxPerMm),
     right: Math.round(overscanMm.right * pxPerMm),
   };
-  // White-border frame (mm → px at this target's grid). sides = 100 mm edges
-  // (top/bottom), ends = 148 mm edges (left/right).
-  const fs = Math.round(config.border.sides * pxPerMm);
-  const fe = Math.round(config.border.ends * pxPerMm);
-  const FRAME = { top: fs, bottom: fs, left: fe, right: fe };
+  // White-border frame: uniform mm on all edges → px at this target's grid.
+  // The client sends its per-device width; fall back to the server default.
+  const bMm = isFinite(options.borderMm) && options.borderMm >= 0 && options.borderMm <= 20
+    ? options.borderMm : config.border;
+  const fp = Math.round(bMm * pxPerMm);
+  const FRAME = { top: fp, bottom: fp, left: fp, right: fp };
 
   let target, outBleed;
   if (format === 'cpnp' || (!raster && config.mediaVariant === 'borderless')) {

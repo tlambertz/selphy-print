@@ -134,22 +134,15 @@ function parseBlueWidth() {
 }
 const blueWidth = parseBlueWidth();
 
-// White-border width per edge in mm, for "White border" mode (a plain white
-// frame baked into the render — the CP1500 always prints borderless at the
-// firmware level, so the border is entirely ours to size). `sides` = the 100 mm
-// edges (editor top/bottom), `ends` = the 148 mm edges (editor left/right).
-// Defaults are the IPP default printable margins (2.5 / 3.7 mm); Canon's app
-// bakes a slightly wider frame — measure a bordered print and set BORDER_MM if
-// you want to match it. The editor visualizes exactly this width.
-function parseBorder() {
-  if (env.BORDER_MM) {
-    const [sides, ends] = env.BORDER_MM.split(',').map(Number);
-    if ([sides, ends].every(isFinite)) return { sides, ends };
-    throw new Error('BORDER_MM must be two numbers: "sides,ends"');
-  }
-  return { sides: 2.5, ends: 3.7 };
-}
-const border = parseBorder();
+// White-border width in mm (uniform on all four edges) for "White border" mode:
+// a plain white frame baked into the render — the CP1500 always prints
+// borderless at the firmware level, so the border is entirely ours to size.
+// This is the server default; the client sends its own per-device value (set in
+// Settings). The editor visualizes exactly this width.
+const border = (() => {
+  const v = Number(env.BORDER_MM);
+  return isFinite(v) && v >= 0 && v <= 20 ? v : 4;
+})();
 
 export const config = {
   port: parseInt(env.PORT || '8080', 10),
