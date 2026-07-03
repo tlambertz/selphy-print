@@ -174,11 +174,11 @@ services.selphy-print = {
 ```
 
 The module fetches the ICC profiles, runs as a `DynamicUser`, and archives
-prints under `/var/lib/selphy-print`. The companion APK is the prebuilt
-`web/selphy-share.apk` (build it with gradle as below, or let the Docker image
-compile it). The package uses `buildNpmPackage` with `npmDepsHash =
-lib.fakeHash`; the first build aborts printing the real hash — paste it into
-`flake.nix` once.
+prints under `/var/lib/selphy-print`. The served companion APK is the committed
+`web/selphy-share.apk`; to rebuild it from source with a pinned Android
+SDK + gradle, run **`nix run .#build-apk`** from the repo root (it fetches the
+Android Gradle Plugin and writes `web/selphy-share.apk` — the Nix equivalent of
+the Docker APK stage). The package builds with `buildNpmPackage`.
 
 ## Configuration (environment variables)
 

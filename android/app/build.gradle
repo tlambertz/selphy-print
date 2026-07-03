@@ -34,6 +34,7 @@ if (!keystoreFile.exists()) {
 android {
   namespace 'net.selphyprint.share'
   compileSdk 35
+  buildToolsVersion '35.0.0'
 
   defaultConfig {
     applicationId "net.selphyprint.share"

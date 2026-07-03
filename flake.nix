@@ -7,7 +7,8 @@
 
   outputs = { self, nixpkgs }:
     let
-      forAllSystems = f: nixpkgs.lib.genAttrs [ "x86_64-linux" "aarch64-linux" ]
+      systems = [ "x86_64-linux" "aarch64-linux" ];
+      forAllSystems = f: nixpkgs.lib.genAttrs systems
         (system: f nixpkgs.legacyPackages.${system});
     in
     {
@@ -38,6 +39,51 @@
           meta.mainProgram = "selphy-print";
         };
       });
+
+      # `nix run .#build-apk` compiles the Android companion app into
+      # web/selphy-share.apk, using a pinned Android SDK + gradle. It runs
+      # gradle at invocation time (not in the build sandbox), so it can fetch
+      # the Android Gradle Plugin and auto-generate the signing keystore — the
+      # Nix equivalent of the Dockerfile's APK build stage.
+      apps = nixpkgs.lib.genAttrs systems (system:
+        let
+          pkgs = import nixpkgs {
+            inherit system;
+            config = { allowUnfree = true; android_sdk.accept_license = true; };
+          };
+          androidSdk = (pkgs.androidenv.composeAndroidPackages {
+            platformVersions = [ "35" ];
+            buildToolsVersions = [ "35.0.0" ];
+            cmdLineToolsVersion = "13.0";
+            includeEmulator = false;
+            includeSystemImages = false;
+            includeNDK = false;
+          }).androidsdk;
+          buildApk = pkgs.writeShellApplication {
+            name = "build-apk";
+            runtimeInputs = [ pkgs.gradle pkgs.jdk17 ];
+            text = ''
+              root="$(pwd)"
+              if [ ! -f "$root/android/app/build.gradle" ]; then
+                echo "error: run this from the selphy-print repo root" >&2
+                exit 1
+              fi
+              export ANDROID_SDK_ROOT="${androidSdk}/libexec/android-sdk"
+              export ANDROID_HOME="$ANDROID_SDK_ROOT"
+              export JAVA_HOME="${pkgs.jdk17.home}"
+              echo "Building the companion APK (fetches the Android Gradle Plugin on first run)…"
+              ( cd "$root/android" && gradle --no-daemon assembleRelease )
+              install -Dm644 "$root"/android/app/build/outputs/apk/release/*.apk "$root/web/selphy-share.apk"
+              echo "wrote $root/web/selphy-share.apk"
+            '';
+          };
+        in {
+          build-apk = {
+            type = "app";
+            program = "${buildApk}/bin/build-apk";
+            meta.description = "Compile the Android companion APK into web/selphy-share.apk";
+          };
+        });
 
       nixosModules.default = { config, lib, pkgs, ... }:
         let
