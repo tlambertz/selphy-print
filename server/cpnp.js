@@ -317,7 +317,14 @@ async function writeData(conn, sessionId, payload, maxw = MAX_CHUNK, log = () =>
 // borderless officially lives for the CP1500 (byte 18: 2 borderless,
 // 3 bordered). Enum values from the decompiled app: imageOptimize OFF=2/ON=3,
 // printFinish AUTO=0/GLOSSY=2.
-function makeStartSpool(jpegSize, { border = false, typePrint = 0, typeJpeg = 0 } = {}) {
+//
+// imageOptimize is the app's "color correct" / Auto Image Correction toggle.
+// The app applies NO pixel math for it (verified in the decompiled
+// DrawLayoutItemVisitor — the visitor is a no-op); it only flips this one byte
+// and the CP1500 firmware does the (content-adaptive) enhancement internally.
+// So OFF=2 gives the deterministic, profileable path we use for ICC work, and
+// ON=3 hands color to the printer exactly like the Canon app's toggle.
+function makeStartSpool(jpegSize, { border = false, imageOptimize = false, typePrint = 0, typeJpeg = 0 } = {}) {
   const b = Buffer.alloc(192);
   le(b, 0, 2, typePrint); // commandType
   le(b, 2, 2, CODE.startSpool); // code = 7
@@ -326,7 +333,7 @@ function makeStartSpool(jpegSize, { border = false, typePrint = 0, typeJpeg = 0 
   le(b, 12, 2, 1); // totalJpegImages
   le(b, 14, 2, CP_POST_SIZE); // printSize = 4
   le(b, 16, 1, 1); // overcoatSetting (each page)
-  le(b, 17, 1, 2); // imageOptimize OFF — deterministic for ICC profiling
+  le(b, 17, 1, imageOptimize ? 3 : 2); // imageOptimize ON=3 (printer auto-correct) / OFF=2
   le(b, 18, 1, border ? 3 : BORDER_BORDERLESS); // borderSetting
   le(b, 19, 1, 0); // printFinish AUTO
   le(b, 32, 4, jpegSize); // JPEG file size for image 0
@@ -368,10 +375,10 @@ function makeSimple(code, { typePrint = 0 } = {}) {
  * Print a JPEG borderless to a SELPHY CP1500 via CPNP.
  * @param {string} host printer IP
  * @param {Buffer} jpeg the image (rendered at ~1752×1184 for postcard)
- * @param {object} opts { width, height, typePrint, typeJpeg, onState }
+ * @param {object} opts { width, height, imageOptimize, typePrint, typeJpeg, onState }
  */
 export async function cpnpPrint(host, jpeg, opts = {}) {
-  const { width = 1184, height = 1752, border = false, onState = () => {}, log = () => {} } = opts;
+  const { width = 1184, height = 1752, border = false, imageOptimize = false, onState = () => {}, log = () => {} } = opts;
 
   onState('session');
   const { sessionId, tcpPort } = await sessionStart(host);
@@ -425,7 +432,7 @@ export async function cpnpPrint(host, jpeg, opts = {}) {
       if ((st.deviceStatus & 0xff00) === 0xff00 && st.deviceStatus !== lastPass) {
         lastPass = st.deviceStatus;
         const pass = PASS_NAMES[st.deviceStatus];
-        if (pass) { onState('printing'); log(`printing: ${pass}`); }
+        if (pass) { onState('pass:' + pass); log(`printing: ${pass}`); }
       }
 
       const key = `${st.state}:${st.dataRequest}:${st.retry}:${st.offset}:${st.length}:${st.deviceStatus}`;
@@ -436,7 +443,7 @@ export async function cpnpPrint(host, jpeg, opts = {}) {
 
       if (st.state === 0x01) {
         onState('start');
-        await writeData(conn, sessionId, makeStartSpool(jpeg.length, { border }), maxw, log);
+        await writeData(conn, sessionId, makeStartSpool(jpeg.length, { border, imageOptimize }), maxw, log);
       } else if (st.state === 0x07) {
         // printer has the whole spool; this commits it to paper
         onState('spool');

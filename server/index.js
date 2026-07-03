@@ -40,13 +40,14 @@ let queueChain = Promise.resolve();
 
 function enqueue(work) {
   const id = ++jobSeq;
-  const job = { id, state: 'queued', stateText: 'queued', createdAt: Date.now() };
+  const job = { id, state: 'queued', stateText: 'queued', progress: 0, createdAt: Date.now() };
   jobs.set(id, job);
   queueChain = queueChain.then(async () => {
     try {
       await work(job);
       job.state = 'done';
       job.stateText = 'printed';
+      job.progress = 100;
     } catch (err) {
       job.state = 'error';
       job.error = String(err.message || err);
@@ -132,6 +133,19 @@ async function archivePrint(id, original, originalFmt, printJpeg) {
     app.log.warn({ err }, 'print archive write failed');
   }
 }
+
+// CPNP print progress (0-100) by reported phase, so the client can draw a real
+// bar. The dye-sub cycle is Y→M→C→overcoat, roughly equal time each; the
+// upload/handshake is quick, so it gets the first ~15%.
+const CPNP_PCT = {
+  session: 3, connecting: 5, start: 7, spool: 9, data: 13,
+  'pass:paper pick': 15, 'pass:initializing': 18,
+  'pass:yellow (heating)': 22, 'pass:yellow': 36,
+  'pass:magenta (heating)': 40, 'pass:magenta': 54,
+  'pass:cyan (heating)': 58, 'pass:cyan': 72,
+  'pass:overcoat (heating)': 76, 'pass:overcoat': 90,
+  'pass:finalizing': 96, done: 100,
+};
 
 /* ---------- API ---------- */
 
@@ -315,6 +329,7 @@ app.post('/api/print', async (req, reply) => {
   const job = enqueue(async (job) => {
     job.state = 'rendering';
     job.stateText = 'processing image…';
+    job.progress = 1;
 
     if (transport === 'cpnp') {
       const cv = config.paper.canvas;
@@ -330,7 +345,12 @@ app.post('/api/print', async (req, reply) => {
           width: cv.h, // portrait after rotate
           height: cv.w,
           imageOptimize, // firmware 'color correct' — printer-side, no ICC
-          onState: (s) => { job.stateText = 'printer: ' + s; },
+          onState: (s) => {
+            job.stateText = 'printer: ' + s.replace(/^pass:/, '');
+            const p = CPNP_PCT[s];
+            // spread each sheet's 0-100 across its slice of the copy run
+            if (p != null) job.progress = Math.max(job.progress, Math.round(((i + p / 100) / copies) * 100));
+          },
         });
       }
       return;
@@ -395,7 +415,7 @@ app.post('/api/preview', async (req, reply) => {
 app.get('/api/jobs/:id', async (req, reply) => {
   const job = jobs.get(parseInt(req.params.id, 10));
   if (!job) return reply.code(404).send('unknown job');
-  return { state: job.state, stateText: job.stateText, error: job.error };
+  return { state: job.state, stateText: job.stateText, error: job.error, progress: job.progress };
 });
 
 // Prints a page of mm rulers so the true visible area / overscan can be
@@ -439,7 +459,11 @@ app.post('/api/calibrate', async () => {
       await cpnpPrint(host, jpeg, {
         width: config.paper.canvas.h,
         height: config.paper.canvas.w,
-        onState: (s) => { job.stateText = 'printer: ' + s; },
+        onState: (s) => {
+          job.stateText = 'printer: ' + s.replace(/^pass:/, '');
+          const p = CPNP_PCT[s];
+          if (p != null) job.progress = Math.max(job.progress, p);
+        },
       });
       return;
     }

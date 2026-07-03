@@ -390,6 +390,17 @@ function render() {
     card.appendChild(rm);
 
     if (item.state !== 'ready') {
+      // Top progress bar for active jobs — determinate from the printer's pass
+      // (CPNP), else an indeterminate sweep.
+      if (item.state === 'queued' || item.state === 'rendering' || item.state === 'printing') {
+        const bar = document.createElement('div');
+        bar.className = 'progress' + (item.progress ? '' : ' indet');
+        const fill = document.createElement('div');
+        fill.className = 'progress-fill';
+        if (item.progress) fill.style.width = item.progress + '%';
+        bar.appendChild(fill);
+        card.appendChild(bar);
+      }
       const st = document.createElement('div');
       st.className = 'state ' + item.state;
       st.textContent = item.stateText || item.state;
@@ -782,6 +793,7 @@ async function printAll() {
     if (item.state === 'done') continue;
     item.state = 'printing';
     item.stateText = 'sending…';
+    item.progress = 0;
     render();
     try {
       const crop = await cropForPrint(item);
@@ -808,6 +820,7 @@ async function printAll() {
       await waitForJob(jobId, item);
       item.state = 'done';
       item.stateText = 'printed';
+      item.progress = 100;
       await inboxDelete([item.id]);
     } catch (err) {
       failed++;
@@ -860,8 +873,9 @@ async function waitForJob(jobId, item) {
     if (job.state === 'done') return;
     if (job.state === 'error') throw new Error(job.error || 'print failed');
     item.stateText = job.stateText || 'printing…';
+    if (typeof job.progress === 'number') item.progress = job.progress;
     render();
-    await new Promise((r) => setTimeout(r, 2000));
+    await new Promise((r) => setTimeout(r, 1500));
   }
   throw new Error('timed out waiting for printer');
 }
