@@ -24,6 +24,9 @@ let overscan = { top: 0, bottom: 0, left: -0.5, right: 1 };
 // sheet (mm) — read straight off the sheet; drives the editor's tear-strip
 // zones. Ends only; the 100 mm sides have no stub (blue runs off, ~0 mm).
 let blueWidth = { left: 2, right: 2 };
+// White-border width (mm) for "White border" mode: sides = 100 mm edges
+// (top/bottom), ends = 148 mm edges (left/right). From /api/config (BORDER_MM).
+let borderMm = { sides: 2.5, ends: 3.7 };
 // Transport geometry: overscanning modes (cpnp; ipp jpeg with the
 // borderless media variant) put ink a few mm past the tear line; plain ipp
 // jpeg aspect-fits the paper rect (ink stops ≈ at the tear line).
@@ -315,6 +318,7 @@ async function fetchConfig() {
     if (cfg.paper) paper = cfg.paper;
     if (cfg.overscan) overscan = cfg.overscan;
     if (cfg.blueWidth) blueWidth = cfg.blueWidth;
+    if (cfg.border) borderMm = cfg.border;
     if (cfg.icc) { iccProfiles = cfg.icc.profiles || []; iccDefault = cfg.icc.defaultId || null; }
     if (cfg.printFormat) printFormat = cfg.printFormat;
     if (cfg.mediaVariant) mediaVariant = cfg.mediaVariant;
@@ -432,10 +436,12 @@ async function paintThumb(canvas, item) {
   else { sw = Math.min(rw, rh * a); sh = sw / a; cx = rw / 2; cy = rh / 2; }
 
   ctx.clearRect(0, 0, cw, ch);
-  // White border ≈ 2.5 mm/100 = 3.7 mm/148 ⇒ a uniform ~2.5% inset each edge.
-  const ins = item.border ? 0.025 : 0;
+  // White border: inset by the configured mm per edge (ends = 148 mm edges,
+  // sides = 100 mm edges), white behind.
   if (item.border) { ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, cw, ch); }
-  const dx = ins * cw, dy = ins * ch, dw = cw - 2 * dx, dh = ch - 2 * dy;
+  const dx = item.border ? (borderMm.ends / paper.mm.w) * cw : 0;
+  const dy = item.border ? (borderMm.sides / paper.mm.h) * ch : 0;
+  const dw = cw - 2 * dx, dh = ch - 2 * dy;
 
   ctx.save();
   ctx.beginPath();
@@ -585,14 +591,27 @@ function layoutEditor() {
 function draw() {
   const img = rotatedSize();
   const f = ed.frame;
-  const scale = f.w / ed.crop.scale; // screen px per image px
-  const h = ed.crop.scale / paperAspect();
 
   ctx.setTransform(devicePixelRatio, 0, 0, devicePixelRatio, 0, 0);
   ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  // In white-border mode the photo maps to the area INSIDE the border; the
+  // frame ring is painted white. Otherwise the crop fills the whole frame.
+  let d = f;
+  if (ed.border) {
+    const ix = borderMm.ends * (f.w / paper.mm.w); // 148 mm edges (left/right)
+    const iy = borderMm.sides * (f.h / paper.mm.h); // 100 mm edges (top/bottom)
+    d = { x: f.x + ix, y: f.y + iy, w: f.w - 2 * ix, h: f.h - 2 * iy };
+    ctx.fillStyle = '#fff';
+    ctx.fillRect(f.x, f.y, f.w, f.h);
+  }
+
+  const scale = d.w / ed.crop.scale; // screen px per image px
+  const h = ed.crop.scale / paperAspect();
   ctx.save();
-  // Map image coords -> screen: crop window (cx,cy,scale) fills the frame.
-  ctx.translate(f.x - (ed.crop.cx - ed.crop.scale / 2) * scale, f.y - (ed.crop.cy - h / 2) * scale);
+  if (ed.border) { ctx.beginPath(); ctx.rect(d.x, d.y, d.w, d.h); ctx.clip(); }
+  // Map image coords -> screen: crop window (cx,cy,scale) fills the dest rect.
+  ctx.translate(d.x - (ed.crop.cx - ed.crop.scale / 2) * scale, d.y - (ed.crop.cy - h / 2) * scale);
   ctx.scale(scale, scale);
   // Apply rotation about the rotated-image space.
   ctx.translate(img.w / 2, img.h / 2);
@@ -661,24 +680,15 @@ $('ed-rotate').addEventListener('click', () => {
   draw();
 });
 
-// Fill presets: set the zoom so the photo fills the paper with a chosen bleed
-// margin — mm of REAL image content pushed past every paper edge. 0 = cover
-// crop, edges flush (the most photo kept); >0 zooms in just enough that the
-// crop is inset from the image by that margin, so the printer bleeds genuine
-// image (not a mirror/white sliver) under the ±1 mm feed drift. maxW is the
-// cover-crop scale; magnifying by (shortHalf+m)/shortHalf overflows the short
-// paper edge by exactly m mm (the long edge gets proportionally more), so
-// every side clears m mm. Framing center is preserved.
-function fillWithBleed(marginMm) {
+// Max fill: cover crop — zoom so the whole photo fills the paper (or the area
+// inside the white border), edges flush, keeping the most of the photo.
+function fillMax() {
   const img = rotatedSize();
-  const maxW = Math.min(img.w, img.h * paperAspect()); // cover-crop scale
-  const shortHalf = Math.min(paper.mm.w, paper.mm.h) / 2; // 50 mm on postcard
-  ed.crop.scale = maxW * (shortHalf / (shortHalf + marginMm));
+  ed.crop.scale = Math.min(img.w, img.h * paperAspect()); // cover-crop scale
   clampCrop();
   draw();
 }
-$('ed-fill-max').addEventListener('click', () => fillWithBleed(0));
-$('ed-fill-bleed').addEventListener('click', () => fillWithBleed(1));
+$('ed-fill-max').addEventListener('click', fillMax);
 
 function syncBorderBtn() {
   const b = $('ed-border');

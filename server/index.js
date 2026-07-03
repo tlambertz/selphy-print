@@ -158,6 +158,7 @@ app.get('/api/config', async () => ({
   printFormat: config.printFormat,
   mediaVariant: config.mediaVariant,
   blueWidth: config.blueWidth,
+  border: config.border,
   icc: {
     enabled: config.icc.profiles.length > 0,
     intent: config.icc.intent,
@@ -222,7 +223,11 @@ function buildRenderPlan(options, format = config.printFormat) {
     left: Math.round(overscanMm.left * pxPerMm),
     right: Math.round(overscanMm.right * pxPerMm),
   };
-  const FRAME = { top: 30, bottom: 30, left: 44, right: 44 }; // bordered white
+  // White-border frame (mm → px at this target's grid). sides = 100 mm edges
+  // (top/bottom), ends = 148 mm edges (left/right).
+  const fs = Math.round(config.border.sides * pxPerMm);
+  const fe = Math.round(config.border.ends * pxPerMm);
+  const FRAME = { top: fs, bottom: fs, left: fe, right: fe };
 
   let target, outBleed;
   if (format === 'cpnp' || (!raster && config.mediaVariant === 'borderless')) {

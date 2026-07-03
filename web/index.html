@@ -136,10 +136,7 @@
       <button id="ed-rotate" class="btn icon-btn" title="Rotate 90°" aria-label="Rotate">
         <svg viewBox="0 0 24 24"><path d="M20 11a8 8 0 1 0-2.34 5.66M20 5v6h-6" /></svg>
       </button>
-      <div class="fill-presets" role="group" aria-label="Fill the paper">
-        <button id="ed-fill-max" class="btn chip" title="Zoom so the photo fills the paper exactly — keeps the most of the photo. Edges land within ±1 mm of the paper edge as the feed varies.">Max fill</button>
-        <button id="ed-fill-bleed" class="btn chip" title="Zoom in a hair so the photo bleeds ~1 mm past every edge — guaranteed borderless with real image (no white slivers or mirrored edges).">+1 mm bleed</button>
-      </div>
+      <button id="ed-fill-max" class="btn chip" title="Zoom so the photo fills the paper exactly — keeps the most of the photo. Edges land within ±1 mm of the paper edge as the feed varies.">Max fill</button>
       <button id="ed-border" class="btn chip" aria-pressed="false" title="Print this photo with a white border instead of edge-to-edge">White border</button>
       <div class="copies">
         <button id="ed-copies-minus" class="btn icon-btn small" aria-label="Fewer copies">
@@ -156,7 +153,7 @@
       <div id="ed-color" class="color-presets"></div>
       <span id="ed-color-note" class="color-note subtle"></span>
     </div>
-    <p id="editor-hint">Drag to move · pinch to zoom<span class="infotip" tabindex="0" role="note" aria-label="Crop help"><span class="info-i">i</span><span class="info-pop up"><b>Max fill</b> = most photo, edges flush. <b>+1 mm bleed</b> = safe borderless. The frame is your photo after tearing; the half-dimmed strips print past the tear line (torn off with the stubs), and darker areas never reach paper. The tear/edge lands inside the dashed band.</span></span></p>
+    <p id="editor-hint">Drag to move · pinch to zoom<span class="infotip" tabindex="0" role="note" aria-label="Crop help"><span class="info-i">i</span><span class="info-pop up"><b>Max fill</b> zooms so the whole photo fills the paper (edges flush). <b>White border</b> insets it inside a white frame. The frame is your photo after tearing; the half-dimmed strips print past the tear line (torn off with the stubs), and darker areas never reach paper. The tear/edge lands inside the dashed band.</span></span></p>
   </div>
 
   <!-- Printer / calibration sheet -->

@@ -134,6 +134,23 @@ function parseBlueWidth() {
 }
 const blueWidth = parseBlueWidth();
 
+// White-border width per edge in mm, for "White border" mode (a plain white
+// frame baked into the render — the CP1500 always prints borderless at the
+// firmware level, so the border is entirely ours to size). `sides` = the 100 mm
+// edges (editor top/bottom), `ends` = the 148 mm edges (editor left/right).
+// Defaults are the IPP default printable margins (2.5 / 3.7 mm); Canon's app
+// bakes a slightly wider frame — measure a bordered print and set BORDER_MM if
+// you want to match it. The editor visualizes exactly this width.
+function parseBorder() {
+  if (env.BORDER_MM) {
+    const [sides, ends] = env.BORDER_MM.split(',').map(Number);
+    if ([sides, ends].every(isFinite)) return { sides, ends };
+    throw new Error('BORDER_MM must be two numbers: "sides,ends"');
+  }
+  return { sides: 2.5, ends: 3.7 };
+}
+const border = parseBorder();
+
 export const config = {
   port: parseInt(env.PORT || '8080', 10),
   host: env.HOST || '0.0.0.0',
@@ -145,6 +162,7 @@ export const config = {
   paper: PAPERS[env.PAPER || 'postcard'],
   overscan,
   blueWidth,
+  border,
 
   icc: {
     // Selectable profiles (client picks per print; empty = no color management).
@@ -162,17 +180,22 @@ export const config = {
     quality: parseInt(env.JPEG_QUALITY || '100', 10),
   },
 
-  /* Transport, learned the hard way on real hardware (and re-learned twice:
-   * measure ink against the PERFORATIONS, and the two JPEG paths differ):
-   * - 'cpnp' (DEFAULT) = Canon's own protocol. The firmware aspect-FILL-scales
-   *   onto the full 1248×1872 head canvas (ink a few mm past the tear lines —
-   *   true overscan borderless), and it's the ONLY transport that can invoke
-   *   the printer's firmware color-correct (Auto Image Correction). Extras:
-   *   per-pass progress, decoded errors, paper-out pause/resume. Firmware
-   *   color mode forces this transport per job regardless of the setting.
-   * - 'jpeg': plain IPP Print-Job with image/jpeg. The firmware aspect-FITS the
-   *   image onto the paper/page area, NO canvas overscan (measured: canvas
-   *   padding printed as visible inset borders), and no firmware color hook.
+  /* Transport. The borderless GEOMETRY is won in render.js by drawing at the
+   * 1248×1872 head canvas so the head images it 1:1 (ink to the perforations) —
+   * NOT by the transport. Measured on real hardware (2026-07-03): 'jpeg' with
+   * print-scaling=fill genuinely enlarges a page-size raster ~7% (a 50 mm bar
+   * printed 53.5 mm = 1872/1748) to reach the same coverage, but it loses
+   * ~3-5 mm of image per edge and softens everything, so we render at canvas
+   * size instead. The old "IPP JPEG can't do borderless / white bars at the
+   * ends" note here was a misread — the white was the blank tear-off stubs
+   * (full story in the README "borders thing").
+   * - 'cpnp' (DEFAULT) = Canon's own protocol. Default NOT for geometry but
+   *   because it's the ONLY transport that can invoke the printer's firmware
+   *   color-correct (Auto Image Correction). Extras: per-pass progress, decoded
+   *   errors, paper-out pause/resume. Firmware color mode forces this transport
+   *   per job regardless of the setting.
+   * - 'jpeg': plain IPP Print-Job with image/jpeg. Same canvas-size render;
+   *   kept for experiments, no firmware color hook.
    * - 'urf'/'pwg' raster paths: URF prints bordered, PWG is rejected —
    *   experiments only. */
   printFormat: env.PRINT_FORMAT || 'cpnp',
@@ -182,7 +205,10 @@ export const config = {
   // 'plain': media keyword — image fits the bare paper rect 1:1; a ±1 mm
   // feed shift leaves a white sliver no image content can cover.
   mediaVariant: env.MEDIA_VARIANT || 'borderless',
-  printScaling: env.PRINT_SCALING || null, // ignored by CP1500; experiments only
+  // 'fill' is NOT ignored — measured 2026-07-03 it enlarges the page raster
+  // ~7% (50 mm bar → 53.5 mm) up to the head canvas. Lossy vs a canvas-size
+  // render, so we leave it null and render at canvas size. Experiments only.
+  printScaling: env.PRINT_SCALING || null,
 
   maxUploadMb: parseInt(env.MAX_UPLOAD_MB || '64', 10),
 
