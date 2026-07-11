@@ -203,9 +203,10 @@
               type = lib.types.nullOr lib.types.path;
               default = null;
               description = ''
-                Pin a specific default profile (must exist; overrides the
-                auto-picked default). Colour is otherwise chosen per photo in the
-                app: an ICC profile, the printer's firmware auto-correct, or off.
+                Add a profile (must exist) and mark it as the picker's default.
+                Colour is chosen per photo in the app via two independent
+                toggles: the printer's firmware auto-correct (default on) and
+                an ICC profile (default off).
               '';
             };
 
@@ -215,14 +216,35 @@
               description = "ICC rendering intent (relative colorimetric + black-point compensation is the photo-printing default).";
             };
 
-            # Borderless trim per edge in mm, "top,bottom,left,right" in the
-            # crop editor's orientation — measure with the in-app calibration
-            # page (T/B/L/R letters). null = built-in defaults.
+            # Calibration is SIX values, all read off the in-app calibration
+            # page and overridable per device in the browser: four edge trims
+            # (overscanMm) + two blue-band widths (blueWidthMm).
+            #
+            # Borderless per-edge trim ("overscan") in page-mm, editor
+            # orientation (landscape, as shown in the crop UI). Order is
+            # top,bottom,left,right — top/bottom are the 100 mm sides,
+            # left/right the 148 mm ends. Values MAY be negative (the mapping
+            # overshoots the paper edge); the server accepts -5..12 mm. Read
+            # the four numbers straight off the in-app calibration page
+            # (T/B/L/R ticks). null = built-in measured defaults (0,0,-0.5,1).
             overscanMm = lib.mkOption {
-              type = lib.types.nullOr lib.types.str;
+              type = lib.types.nullOr (lib.types.strMatching
+                "-?[0-9]+(\\.[0-9]+)?,-?[0-9]+(\\.[0-9]+)?,-?[0-9]+(\\.[0-9]+)?,-?[0-9]+(\\.[0-9]+)?");
               default = null;
-              example = "2.5,2.5,4.2,5.8";
-              description = "Safe-area insets, top,bottom,left,right in mm.";
+              example = "0,0,-0.5,1";
+              description = "Calibration 1-4: borderless trim per edge, top,bottom,left,right in page-mm (may be negative).";
+            };
+
+            # Visible width of the blue overscan band on the left/right
+            # tear-off ends, in mm — the remaining two calibration values,
+            # read off the same page. Only drives the editor's
+            # prints-past-the-tear-line visualization, not print geometry.
+            blueWidthMm = lib.mkOption {
+              type = lib.types.nullOr (lib.types.strMatching
+                "[0-9]+(\\.[0-9]+)?,[0-9]+(\\.[0-9]+)?");
+              default = null;
+              example = "2,2";
+              description = "Calibration 5-6: visible blue-band width on the two ends, left,right in mm. null = built-in defaults (2,2).";
             };
 
             openFirewall = lib.mkOption {
@@ -246,20 +268,66 @@
                 PRINT_ARCHIVE_DIR = "/var/lib/selphy-print/archive";
               } // lib.optionalAttrs (cfg.overscanMm != null) {
                 OVERSCAN_MM = cfg.overscanMm;
+              } // lib.optionalAttrs (cfg.blueWidthMm != null) {
+                BLUE_MM = cfg.blueWidthMm;
               } // lib.optionalAttrs (cfg.iccProfile != null) {
                 ICC_PROFILE = toString cfg.iccProfile;
               };
               serviceConfig = {
                 ExecStart = lib.getExe cfg.package;
+                Restart = "on-failure";
+
+                # -- identity & the one writable path --
                 DynamicUser = true;
                 # Writable /var/lib/selphy-print for the print archive.
                 StateDirectory = "selphy-print";
-                Restart = "on-failure";
-                # sharp/libvips writes temp files during conversion
-                PrivateTmp = true;
-                ProtectSystem = "strict";
+                StateDirectoryMode = "0750";
+                UMask = "0077";
+
+                # -- filesystem --
+                ProtectSystem = "strict"; # whole FS read-only bar StateDirectory + tmp
                 ProtectHome = true;
+                # sharp/libvips and the tificc subprocess write temp files here.
+                PrivateTmp = true;
+                PrivateDevices = true; # minimal /dev (null, zero, (u)random, tty)
+                ProtectProc = "invisible"; # hide other processes' /proc entries
+                # NB: deliberately NOT ProcSubset=pid — libvips and Node's
+                # os.cpus() read /proc/cpuinfo,/proc/stat, which that would hide.
+                ProtectControlGroups = true;
+                ProtectKernelTunables = true;
+                ProtectKernelModules = true;
+                ProtectKernelLogs = true;
+                ProtectClock = true;
+                ProtectHostname = true;
+
+                # -- privileges --
                 NoNewPrivileges = true;
+                CapabilityBoundingSet = ""; # needs none (binds unprivileged :8080)
+                AmbientCapabilities = "";
+                RestrictSUIDSGID = true;
+                RemoveIPC = true;
+                LockPersonality = true;
+                RestrictRealtime = true;
+                PrivateUsers = true;
+                RestrictNamespaces = true;
+
+                # -- syscalls --
+                SystemCallArchitectures = "native";
+                SystemCallFilter = [ "@system-service" "~@privileged" "~@resources" ];
+                # NB: no MemoryDenyWriteExecute — V8's JIT needs W+X pages and
+                # would crash the process under it.
+
+                # -- network --
+                # Serves HTTP to LAN clients; reaches the printer over TCP + UDP
+                # (CPNP). AF_NETLINK is kept so getaddrinfo / interface lookups
+                # work when printerHost is a hostname.
+                RestrictAddressFamilies = [ "AF_UNIX" "AF_INET" "AF_INET6" "AF_NETLINK" ];
+                # Only two peers exist: inbound from the loopback reverse proxy,
+                # outbound to the printer. printerHost must be a literal IP for
+                # this (it's the address on IPAddressAllow, not a hostname). If
+                # clients hit the server directly, add your LAN subnet instead.
+                IPAddressDeny = "any";
+                IPAddressAllow = [ "localhost" "link-local" cfg.printerHost ];
               };
             };
 
