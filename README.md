@@ -2,6 +2,13 @@
 
 A self-hosted web-frontend and backend to do color-corrected prints from any device in your local wifi to a Canon CP1500. It can scale/rotate/add a border, and be a "share-to" target for any Android application.
 
+<table>
+  <tr>
+    <td width="50%"><img src="docs/Screenshot2.png" alt="Print queue with the connected Canon SELPHY CP1500" width="100%" /></td>
+    <td width="50%"><img src="docs/Screenshot1.png" alt="Crop / adjust view with border and color-correction options" width="100%" /></td>
+  </tr>
+</table>
+
 A full AI-written readme can be found in README_AI.md, here are my human thoughts:
 
 I got fed-up with the official app being slow, and *not being able to share a photo* to the app, always having to use the borderline unusable integrated photo-picker. This works fine for recent fotos, but was a terrible experience for older ones. Also, guests would always have to install and pair the app, which sucked.
