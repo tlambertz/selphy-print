@@ -75,18 +75,23 @@ const COLOR_KEY = 'selphy-color-default'; // default ICC choice for NEW photos
 const FIRMWARE_KEY = 'selphy-firmware-default'; // default firmware toggle (NEW photos)
 const LEGACY_COLOR_KEY = 'selphy-icc-profile'; // pre-per-image global value
 const FIRMWARE = 'firmware'; // legacy single-mode value (migrated away)
-// Default ICC choice for new photos. Legacy 'firmware'-only maps to no ICC.
+// Default ICC choice for new photos: a saved choice wins, otherwise OFF —
+// the printer's own auto-correct is the out-of-the-box color path.
 function colorDefault() {
   const saved = localStorage.getItem(COLOR_KEY) ?? localStorage.getItem(LEGACY_COLOR_KEY);
   if (saved === FIRMWARE) return '';
-  return saved !== null ? saved : (iccDefault || '');
+  return saved !== null ? saved : '';
 }
-// Default firmware auto-correct for new photos (migrates the legacy 'firmware'
-// single-mode default to firmware-on).
+// Default firmware auto-correct for new photos: ON out of the box. A saved
+// toggle wins; a legacy single-mode choice keeps its old meaning ('firmware'
+// → on; an explicit profile/off choice → off, since the old model coupled
+// choosing ICC with firmware-off).
 function firmwareDefault() {
   const f = localStorage.getItem(FIRMWARE_KEY);
   if (f !== null) return f === '1';
-  return (localStorage.getItem(COLOR_KEY) ?? localStorage.getItem(LEGACY_COLOR_KEY)) === FIRMWARE;
+  const legacy = localStorage.getItem(COLOR_KEY) ?? localStorage.getItem(LEGACY_COLOR_KEY);
+  if (legacy !== null) return legacy === FIRMWARE;
+  return true;
 }
 // Short chip label for an ICC value.
 function colorLabel(value) {

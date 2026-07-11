@@ -282,15 +282,15 @@ function buildRenderPlan(options, format = config.printFormat) {
 }
 
 // Resolve the ICC options for a job into a renderForPrint icc object. The
-// client sends options.iccProfile = a profile id, '' / 'none' to disable, or
-// omits it to use the server default. (options.icc === false also disables,
-// for older clients.)
+// client sends options.iccProfile = a profile id, or '' / 'none' / omitted for
+// no ICC — profiles are opt-in per job; the out-of-the-box color path is the
+// printer's firmware auto-correct. (options.icc === false also disables.)
 function resolveIcc(options) {
   const choice = options.iccProfile;
-  if (options.icc === false || choice === '' || choice === 'none') return {};
+  if (choice == null || choice === '' || choice === 'none' || options.icc === false) return {};
   const list = config.icc.profiles;
-  let entry = choice ? list.find((p) => p.id === choice) : null;
-  if (!entry) entry = list.find((p) => p.id === config.icc.defaultId);
+  // Unknown id (stale client) → the server's default profile, if any.
+  const entry = list.find((p) => p.id === choice) ?? list.find((p) => p.id === config.icc.defaultId);
   if (!entry) return {};
   return { profile: entry.path, intent: config.icc.intent, quality: config.icc.quality };
 }
@@ -298,16 +298,24 @@ function resolveIcc(options) {
 // Color has two INDEPENDENT, combinable levers:
 //   options.colorMode ('' | <profile id>) → ICC conversion in software (or none)
 //   options.firmware  (bool)              → printer Auto Image Correction (CPNP)
-// Either, both, or neither. Both on = convert into the ICC profile, then let the
-// firmware adaptively enhance on top (note: the profile was likely characterized
-// with firmware OFF, so this stacks a correction it didn't account for).
-// Back-compat: old clients sent colorMode:'firmware' as a standalone mode, and
-// legacy options.iccProfile as a bare profile id (firmware off).
+// Either, both, or neither; defaults are firmware ON, ICC off. Both on =
+// convert into the ICC profile, then let the firmware adaptively enhance on
+// top (note: the profile was likely characterized with firmware OFF, so this
+// stacks a correction it didn't account for).
 function resolveColor(options) {
-  const legacyFirmware = (options.colorMode ?? options.iccProfile) === 'firmware';
-  const iccMode = legacyFirmware ? '' : (options.colorMode ?? options.iccProfile);
-  const imageOptimize = legacyFirmware || !!options.firmware;
-  return { icc: resolveIcc({ ...options, iccProfile: iccMode }), imageOptimize };
+  const mode = options.colorMode ?? options.iccProfile;
+  const iccMode = mode === 'firmware' ? '' : mode; // legacy single-mode value
+  return { icc: resolveIcc({ ...options, iccProfile: iccMode }), imageOptimize: wantsFirmware(options) };
+}
+
+// Firmware auto-correct for a job: the explicit toggle wins; a job with no
+// color options at all gets it ON (the default color path). Back-compat: old
+// single-select clients sent colorMode 'firmware' (→ on) or a profile/'' with
+// no firmware field — where choosing ICC/off implied firmware-off.
+function wantsFirmware(options) {
+  const mode = options.colorMode ?? options.iccProfile;
+  if (mode === 'firmware') return true;
+  return options.firmware ?? mode == null;
 }
 
 // Transport chosen per job. CPNP is the default (true full-bleed borderless).
@@ -315,8 +323,7 @@ function resolveColor(options) {
 // if the server is configured for an IPP format. Explicit raster formats
 // (pwg/urf) are honored except when firmware correction is requested.
 function effectiveFormat(options) {
-  const legacyFirmware = (options.colorMode ?? options.iccProfile) === 'firmware';
-  if (legacyFirmware || options.firmware) return 'cpnp';
+  if (wantsFirmware(options)) return 'cpnp';
   return config.printFormat;
 }
 

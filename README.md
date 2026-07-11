@@ -25,7 +25,7 @@ This does NOT work for degoogled Android/grapheneOS/non-chrome browsers. For tho
 
 - Connect the printer to your local WiFi, take note of the IP.
 - Install this app with either nix or docker (or ask AI how). I am using the nix setup myself. Set correct IP in the config. For the PWA to work correctly, you need a reverse-proxy with valid https certificate. Since I have one anyways for various services, it's not part of this repo.
-- Print a calibration page, make note of the offsets, so the UI shows the correct boundaries. Note: this config is client-side only, defaults are always fetched from server config!
+- Print a calibration page, make note of the six values (four per-edge offsets + the two blue-strip widths on the ends), so the UI shows the correct boundaries. Note: this config is client-side only, defaults are always fetched from server config!
 - *profit*.
 
 You can easily switch the Printer between App mode and WiFi/website mode. The printer caches wifi creds, and just asks you "should i take the previous ones" on switching. BUT: whole flow takes like 30 seconds.
@@ -33,4 +33,4 @@ You can easily switch the Printer between App mode and WiFi/website mode. The pr
 ## Notes
 
 - In theory this might work with other printers as well? Have not tested.
-- There is working color correction, both via ICC profiles and the printer-built-in color-correction you can otherwise choose in the App. I have found that just relying on that and not using ICC profiles works best for my taste, but feel free to experiment. If you have a great setup, please open an issue/PR!
+- There is working color correction, both via ICC profiles and the printer-built-in color-correction you can otherwise choose in the App. I have found that just relying on that and not using ICC profiles works best for my taste, so that's the default (per photo: printer color-correction ON, ICC off) — but feel free to experiment. If you have a great setup, please open an issue/PR!

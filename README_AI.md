@@ -58,13 +58,15 @@ Android share sheet ──► PWA (crop UI, queue) ──► Node server ──�
   errors, and paper-out pause/resume. `PWG` raster is rejected by the CP1500 and
   `URF` prints bordered — both experiments-only.
 - **Color:** the CP1500 has a fixed internal color pipeline that cannot be
-  disabled and tends to oversaturate with a bluish cast. Each photo gets a
-  **color mode** (chosen per-image in the crop editor): convert into a printer
-  **ICC profile** that characterizes that whole pipeline (accurate color),
-  hand color to the printer's own **firmware auto-correct** (Canon's "color
-  correct", CPNP-only), or **off** (raw sRGB). Multiple profiles can be
-  installed and switched between, with an optional per-photo brightness curve,
-  and a no-paper **Preview** that renders the exact bytes the printer will get.
+  disabled and tends to oversaturate with a bluish cast. Each photo gets two
+  **independent, combinable color toggles** (set per-image in the crop
+  editor): the printer's own **firmware auto-correct** (Canon's "color
+  correct", CPNP-only — **on by default**), and conversion into a printer
+  **ICC profile** that characterizes the whole pipeline (**off by default**;
+  use it instead of — or on top of — the auto-correct). Multiple profiles can
+  be installed and switched between, with an optional per-photo brightness
+  curve, and a no-paper **Preview** that renders the exact bytes the printer
+  will get.
 
 ## Quick start (dev)
 
@@ -202,12 +204,12 @@ at invocation time; handy for local iteration without touching the lockfile).
 | `PRINTER_URL`   | `ipp://HOST:631/ipp/print` | Full IPP URL override (only the IPP/JPEG transports use it) |
 | `PRINT_FORMAT`  | `cpnp`             | Transport. `cpnp` = true borderless + firmware color (default); `jpeg`/`urf`/`pwg` are experiments only |
 | `MEDIA_VARIANT` | `borderless`       | `borderless` (full-bleed canvas) or `plain` (1:1 on bare paper; IPP path only) |
-| `ICC_PROFILE`   | *(none)*           | Absolute path to the printer ICC profile; unset = no color management |
+| `ICC_PROFILE`   | *(none)*           | Absolute path to an ICC profile to add and mark as the picker's default (ICC is off per photo unless selected; the default color path is the printer's auto-correct) |
 | `ICC_DIR`       | `./profiles`       | Directory scanned for selectable `*.icc` profiles (client picks per print) |
 | `ICC_INTENT`    | `relative`         | `relative` (accurate in-gamut, + black-point compensation), `perceptual`, `saturation`, `absolute` |
 | `JPEG_QUALITY`  | `100`              | Quality of the JPEG sent to the printer (near-lossless on the LAN) |
-| `OVERSCAN_MM`   | *(measured/calibrated)* | Per-edge trim `"top,bottom,left,right"` in mm (crop-editor orientation; matches the calibration page's T/B/L/R letters) |
-| `BLUE_MM`       | `2,2`              | Calibration visual only: width of the blue overscan band per short end (mm) |
+| `OVERSCAN_MM`   | `0,0,-0.5,1`       | Calibration values 1-4: per-edge trim `"top,bottom,left,right"` in mm (crop-editor orientation; matches the calibration page's T/B/L/R letters; negative = overshoots that edge) |
+| `BLUE_MM`       | `2,2`              | Calibration values 5-6: visible width of the blue overscan band per tear-off end, `"left,right"` in mm (drives the editor's tear-line visualization only) |
 | `PAPER`         | `postcard`         | Paper/geometry preset (KP-108IN postcard) |
 | `PRINT_ARCHIVE_DIR` | `./print-archive` | Where each print is archived (original + rendered); `off` disables it |
 | `MAX_UPLOAD_MB` | `64`               | Max upload size for bulk shares |
@@ -312,14 +314,17 @@ are dev-only and harmless without the (uncommitted) keystore.
   you see it until you tear them — while the side-overflow (editor
   top/bottom) is sprayed past the paper's long edges inside the printer and
   is never visible. Both are real image loss; only one leaves evidence.
-- **Calibration:** tap the printer status pill → *Print calibration page*.
-  The print carries mm rulers counted inward from each edge plus the letters
-  **T/B/L/R** (hold it so T reads on top — that matches the crop editor's
-  orientation). On the short ends, read the tick **at the tear-off
-  perforation**, not at the stub's outer edge. The first readable tick next
-  to each letter is your unit's real trim on that edge; enter the four values
-  in the same sheet (stored per device in the browser and sent with every
-  print job; server-wide defaults via `OVERSCAN_MM`). From then on every
+- **Calibration** is **six values**, all read off one print: tap the printer
+  status pill → *Print calibration page*. The print carries mm rulers counted
+  inward from each edge plus the letters **T/B/L/R** (hold it so T reads on
+  top — that matches the crop editor's orientation). On the short ends, read
+  the tick **at the tear-off perforation**, not at the stub's outer edge.
+  Values 1–4: the first readable tick next to each letter is your unit's real
+  trim on that edge. Values 5–6: the visible width of the **blue band** on
+  each tear-off end (it only feeds the editor's "prints past the tear line"
+  visualization, not the print geometry). Enter all six in the same sheet
+  (stored per device in the browser and sent with every print job;
+  server-wide defaults via `OVERSCAN_MM` + `BLUE_MM`). From then on every
   borderless print is pre-compensated with those values. Opposite edges
   genuinely differ (~1–2 mm feed offset), which is why calibration is per
   edge. The calibration page itself always prints uncompensated, so
@@ -342,10 +347,11 @@ are dev-only and harmless without the (uncommitted) keystore.
   assumes sRGB and its own correction is already baked into the profile.
   (`tificc`, not `jpgicc`: `jpgicc` re-encodes at 4:2:0 with no way to stop it,
   discarding chroma the head can't recover.)
-- **Firmware auto-correct** mode sends no ICC — it just sets the CPNP
+- **Firmware auto-correct** — the default color path — sets the CPNP
   `imageOptimize` flag so the printer does its own content-adaptive correction
-  (the Preview shows the un-optimized image, since that adjustment happens
-  in-printer and can't be reproduced client-side).
+  (the Preview shows the image before that correction, since it happens
+  in-printer and can't be reproduced client-side). It's independent of the
+  ICC toggle: run either, both (profile first, firmware on top), or neither.
 
 ## Tests
 

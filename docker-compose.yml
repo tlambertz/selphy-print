@@ -13,18 +13,24 @@ services:
       - "8080:8080"
     environment:
       PRINTER_HOST: "192.168.1.42" # <- your CP1500's IP or CP1500xxxxxx.local
-      # The free ICC profiles are baked into the image and auto-discovered
-      # (selectable per photo in the app); the default is farbenwerk. To pin a
-      # different default or add your own, set ICC_PROFILE / mount over
-      # /app/profiles. relative intent = accurate in-gamut + black-point
-      # compensation; perceptual only helps very saturated art.
+      # Color default: the printer's own auto-correct is ON and ICC is OFF for
+      # new photos — both are per-photo toggles in the crop editor. The free
+      # ICC profiles are baked into the image and auto-discovered (selectable
+      # per photo); add your own via ICC_PROFILE / mounting over /app/profiles.
+      # relative intent = accurate in-gamut + black-point compensation;
+      # perceptual only helps very saturated art.
       ICC_INTENT: relative
-      # Per-edge trim "top,bottom,left,right" in mm (crop-editor orientation).
-      # Measure it with the in-app calibration page (T/B/L/R letters); this is
-      # the server-wide default, overridable per device in the browser. These
-      # are the built-in defaults, measured on a reference CP1500 (negative =
-      # the print window overshoots the paper/perforation on that edge).
+      # Calibration is SIX values, measured off the in-app calibration page
+      # and overridable per device in the browser; these are the built-in
+      # defaults from the reference CP1500.
+      # 1-4: per-edge trim "top,bottom,left,right" in mm (crop-editor
+      # orientation, matches the page's T/B/L/R letters; negative = the print
+      # window overshoots the paper/perforation on that edge).
       OVERSCAN_MM: "0,0,-0.5,1"
+      # 5-6: visible width of the blue overscan band on the left/right
+      # tear-off ends, "left,right" in mm — read off the same page; drives the
+      # editor's prints-past-the-tear-line visualization only.
+      BLUE_MM: "2,2"
     volumes:
       # Keep a copy of every print (untouched upload + rendered image).
       # The dir is owned by the container's `node` user (uid 1000).
