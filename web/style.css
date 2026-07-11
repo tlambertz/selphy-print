@@ -160,7 +160,18 @@ body {
   padding: 7px 14px 7px 11px;
   cursor: pointer;
   max-width: 55vw;
+  /* Without this the pill's min-width:auto floor is its full text width, so
+     when the Install button appears the top bar can't fit and mobile Chrome
+     expands the layout viewport (whole app overflows the screen). min-width:0
+     lets the pill shrink and the status text ellipsize instead. */
+  min-width: 0;
+  overflow: hidden; /* at its minimum the gear must clip, not poke out */
   transition: border-color 0.15s, background 0.15s;
+}
+/* Tiny screens: icon-only Install so brand + Install + pill always fit. */
+@media (max-width: 360px) {
+  #topbar { gap: 8px; }
+  .install-btn span { display: none; }
 }
 .status-pill:hover { border-color: var(--line-strong); background: var(--surface-2); }
 #status-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

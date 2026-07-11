@@ -21,8 +21,10 @@ services:
       ICC_INTENT: relative
       # Per-edge trim "top,bottom,left,right" in mm (crop-editor orientation).
       # Measure it with the in-app calibration page (T/B/L/R letters); this is
-      # the server-wide default, overridable per device in the browser.
-      OVERSCAN_MM: "1,1,1,1"
+      # the server-wide default, overridable per device in the browser. These
+      # are the built-in defaults, measured on a reference CP1500 (negative =
+      # the print window overshoots the paper/perforation on that edge).
+      OVERSCAN_MM: "0,0,-0.5,1"
     volumes:
       # Keep a copy of every print (untouched upload + rendered image).
       # The dir is owned by the container's `node` user (uid 1000).
