@@ -65,54 +65,68 @@ function effectiveBlueWidth() {
     : blueWidth;
 }
 
-// Color mode is PER IMAGE (like crop/rotate/border): 'firmware' (let the
-// printer auto-correct), '' (off), or an ICC profile id — stored on each queue
-// item as item.color. The Settings dropdown only sets the DEFAULT applied to
-// newly-added photos.
+// Color has TWO independent, COMBINABLE per-image levers, stored on each queue
+// item: item.color = ICC choice ('' off | profile id), and item.firmware = bool
+// (printer Auto Image Correction). Either, both, or neither. The Settings
+// controls set the DEFAULTS applied to newly-added photos.
 let iccProfiles = []; // [{id,name}] from the server
 let iccDefault = null; // server default id
-const COLOR_KEY = 'selphy-color-default'; // default color mode for NEW photos
+const COLOR_KEY = 'selphy-color-default'; // default ICC choice for NEW photos
+const FIRMWARE_KEY = 'selphy-firmware-default'; // default firmware toggle (NEW photos)
 const LEGACY_COLOR_KEY = 'selphy-icc-profile'; // pre-per-image global value
-const FIRMWARE = 'firmware';
-// Default color mode for newly-added photos (set in Settings; falls back to the
-// old global value, then the server's default profile).
+const FIRMWARE = 'firmware'; // legacy single-mode value (migrated away)
+// Default ICC choice for new photos. Legacy 'firmware'-only maps to no ICC.
 function colorDefault() {
   const saved = localStorage.getItem(COLOR_KEY) ?? localStorage.getItem(LEGACY_COLOR_KEY);
+  if (saved === FIRMWARE) return '';
   return saved !== null ? saved : (iccDefault || '');
 }
-// Short chip label for a mode value.
+// Default firmware auto-correct for new photos (migrates the legacy 'firmware'
+// single-mode default to firmware-on).
+function firmwareDefault() {
+  const f = localStorage.getItem(FIRMWARE_KEY);
+  if (f !== null) return f === '1';
+  return (localStorage.getItem(COLOR_KEY) ?? localStorage.getItem(LEGACY_COLOR_KEY)) === FIRMWARE;
+}
+// Short chip label for an ICC value.
 function colorLabel(value) {
-  if (value === FIRMWARE) return 'Canon firmware';
   if (value === '' || value === 'none') return 'Off';
   const p = iccProfiles.find((p) => p.id === value);
   // profile names like "CP1500-farbenwerk" → "farbenwerk" for a compact chip
   return p ? (p.name.split(/[-_]/).pop() || p.name) : value;
 }
-// Ordered list of selectable modes: firmware first, then each ICC profile,
-// then off — exactly the "Canon firmware, ICC A, ICC B" spectrum.
-function colorModes() {
-  const modes = [
-    { value: FIRMWARE, label: 'Canon firmware', title: 'Let the printer auto-correct color in firmware (the Canon app’s "color correct"). No ICC — preview shows the un-optimized image.' },
-  ];
-  for (const p of iccProfiles) {
-    modes.push({ value: p.id, label: colorLabel(p.id), title: 'ICC profile: ' + p.name + (p.id === iccDefault ? ' (default)' : '') + '. Firmware auto-correct is turned off so the profile stays deterministic.' });
-  }
-  modes.push({ value: '', label: 'Off', title: 'No color management: raw sRGB, firmware auto-correct off.' });
+// ICC choices for the single-select chip group: each profile, then Off.
+function iccModes() {
+  const modes = iccProfiles.map((p) => ({
+    value: p.id,
+    label: colorLabel(p.id),
+    title: 'ICC profile: ' + p.name + (p.id === iccDefault ? ' (default)' : '') + '. Combine with Canon auto-correct if you like.',
+  }));
+  modes.push({ value: '', label: 'Off', title: 'No ICC — raw sRGB.' });
   return modes;
 }
-// Refresh both surfaces: editor chips reflect the CURRENT photo (ed.color); the
-// settings dropdown reflects the default for new photos.
+// Refresh both surfaces: editor chips reflect the CURRENT photo; the settings
+// controls reflect the defaults for new photos.
 function syncColorControls() {
   populateColorChips();
   const sel = $('opt-icc');
   if (sel && sel.options.length) sel.value = colorDefault();
+  const fw = $('opt-firmware');
+  if (fw) fw.checked = firmwareDefault();
 }
-// Editor chip → set THIS photo's color; re-render an open preview so A/B is live.
+// Editor chip → set THIS photo's ICC; re-render an open preview so A/B is live.
 function setItemColor(value) {
   if (!ed) return;
   ed.color = value;
   populateColorChips();
   if (!$('preview-modal').hidden) showPreview();
+}
+// Toggle THIS photo's firmware auto-correct (independent of ICC). It runs in the
+// printer, so it can't be previewed — no re-render needed.
+function toggleItemFirmware() {
+  if (!ed) return;
+  ed.firmware = !ed.firmware;
+  populateColorChips();
 }
 // Brightness (percent, per device): brightens before ICC. 0 = neutral.
 const BRIGHT_KEY = 'selphy-brightness';
@@ -130,12 +144,10 @@ function populateIccSelect() {
   const note = $('icc-note');
   sel.innerHTML = '';
   sel.disabled = false;
-  // Canon firmware works with zero profiles; ICC choices need profiles present.
-  sel.add(new Option('Canon firmware (printer auto-correct)', FIRMWARE));
   for (const p of iccProfiles) {
     sel.add(new Option('ICC · ' + p.name + (p.id === iccDefault ? ' (default)' : ''), p.id));
   }
-  sel.add(new Option('Off — no color management', ''));
+  sel.add(new Option('Off — no ICC', ''));
   sel.value = colorDefault();
   note.textContent = iccProfiles.length
     ? 'Default for new photos. Each photo’s color is set per-image in the crop editor (chips under the photo) and shown in its Preview.'
@@ -147,24 +159,34 @@ function populateIccSelect() {
 function populateColorChips() {
   const wrap = $('ed-color');
   if (!wrap) return;
-  const active = ed ? ed.color : colorDefault();
+  const activeIcc = ed ? ed.color : colorDefault();
+  const fw = ed ? !!ed.firmware : firmwareDefault();
   wrap.innerHTML = '';
-  for (const m of colorModes()) {
+  // ICC choices (single-select).
+  for (const m of iccModes()) {
     const btn = document.createElement('button');
     btn.className = 'btn chip color-chip';
     btn.dataset.color = m.value;
     btn.textContent = m.label;
     btn.title = m.title;
-    btn.setAttribute('aria-pressed', String(m.value === active));
+    btn.setAttribute('aria-pressed', String(m.value === activeIcc));
     wrap.appendChild(btn);
   }
+  // Independent firmware toggle — combines with any ICC choice.
+  const fwBtn = document.createElement('button');
+  fwBtn.className = 'btn chip color-chip fw-chip';
+  fwBtn.dataset.fw = '1';
+  fwBtn.textContent = 'Canon auto-correct';
+  fwBtn.title = 'Printer-side Auto Image Correction (CPNP). Combine with an ICC profile, or use it alone.';
+  fwBtn.setAttribute('aria-pressed', String(fw));
+  wrap.appendChild(fwBtn);
+
   const note = $('ed-color-note');
   if (note) {
-    note.textContent =
-      active === FIRMWARE
-        ? 'Printer optimizes color in firmware (prints via CPNP) — preview shows the un-optimized image.'
-      : active === '' || active === 'none' ? 'No color management — preview is exact.'
-      : 'ICC “' + colorLabel(active) + '” — preview is exact.';
+    const base = activeIcc === '' || activeIcc === 'none' ? 'No ICC' : 'ICC “' + colorLabel(activeIcc) + '”';
+    note.textContent = fw
+      ? base + ' + Canon auto-correct (runs in the printer via CPNP; Preview shows the image before firmware correction).'
+      : base + ' — Preview is exact.';
   }
 }
 
@@ -388,7 +410,9 @@ async function loadInbox() {
       rotate: rec.rotate || 0,
       copies: rec.copies || 1,
       border: !!rec.border, // per-image white border (else edge-to-edge)
-      color: rec.color ?? colorDefault(), // per-image color mode
+      // Two independent color levers; migrate legacy 'firmware' single-mode.
+      color: rec.color === FIRMWARE ? '' : (rec.color ?? colorDefault()),
+      firmware: rec.firmware ?? (rec.color === FIRMWARE ? true : firmwareDefault()),
       state: 'ready',
     });
     addedIds.push(rec.id);
@@ -517,6 +541,7 @@ async function openEditor(item) {
     copies: item.copies,
     border: !!item.border,
     color: item.color ?? colorDefault(),
+    firmware: item.firmware ?? firmwareDefault(),
     crop: item.crop ? { ...item.crop } : null,
   };
   editor.hidden = false;
@@ -761,14 +786,20 @@ $('ed-copies-plus').addEventListener('click', () => {
   ed.copies = Math.min(99, ed.copies + 1);
   $('ed-copies').textContent = ed.copies + '×';
 });
-// Settings dropdown sets the DEFAULT color mode for newly-added photos.
+// Settings controls set the DEFAULTS for newly-added photos.
 $('opt-icc').addEventListener('change', (e) => {
   localStorage.setItem(COLOR_KEY, e.target.value);
 });
-// Editor color chips set THIS photo's color (event-delegated; rebuilt on open).
+$('opt-firmware')?.addEventListener('change', (e) => {
+  localStorage.setItem(FIRMWARE_KEY, e.target.checked ? '1' : '0');
+});
+// Editor color chips: ICC chips set THIS photo's ICC; the firmware chip toggles
+// auto-correct independently (event-delegated; rebuilt on open).
 $('ed-color').addEventListener('click', (e) => {
   const btn = e.target.closest('.color-chip');
-  if (btn) setItemColor(btn.dataset.color);
+  if (!btn) return;
+  if (btn.dataset.fw) toggleItemFirmware();
+  else setItemColor(btn.dataset.color);
 });
 $('opt-bright').addEventListener('input', (e) => {
   localStorage.setItem(BRIGHT_KEY, e.target.value);
@@ -809,6 +840,9 @@ async function showPreview() {
       borderMm: effectiveBorderMm(),
       overscan: effectiveOverscan(),
       colorMode: ed.color,
+      // firmware can't be previewed, but it forces the CPNP transport on the
+      // server — send it so the preview uses the same render geometry.
+      firmware: ed.firmware,
       brightness: brightnessVal(),
     }));
     const res = await fetch('api/preview', { method: 'POST', body: form });
@@ -838,9 +872,11 @@ $('ed-done').addEventListener('click', () => {
   ed.item.copies = ed.copies;
   ed.item.border = ed.border;
   ed.item.color = ed.color;
+  ed.item.firmware = ed.firmware;
   // Persist so crop/orientation/copies/border/color survive a page refresh.
   inboxUpdate(ed.item.id, {
-    crop: ed.item.crop, rotate: ed.item.rotate, copies: ed.item.copies, border: ed.item.border, color: ed.item.color,
+    crop: ed.item.crop, rotate: ed.item.rotate, copies: ed.item.copies, border: ed.item.border,
+    color: ed.item.color, firmware: ed.item.firmware,
   });
   closeEditor();
   render();
@@ -928,6 +964,7 @@ async function printAll() {
           // per-device calibration → the server pre-compensates the render
           overscan: effectiveOverscan(),
           colorMode: item.color ?? colorDefault(),
+          firmware: item.firmware ?? firmwareDefault(),
           brightness: brightnessVal(),
         })
       );

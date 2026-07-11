@@ -295,28 +295,28 @@ function resolveIcc(options) {
   return { profile: entry.path, intent: config.icc.intent, quality: config.icc.quality };
 }
 
-// A job picks ONE mutually-exclusive color mode via options.colorMode:
-//   'firmware'      → hand color to the printer (Auto Image Correction ON, the
-//                     Canon app's "color correct"); no ICC pre-compensation.
-//   'off' | ''      → no color management at all (raw sRGB, optimize OFF).
-//   <profile id>    → convert into that ICC profile; optimize stays OFF so the
-//                     profile characterizes a deterministic printer path.
-// Returns { icc, imageOptimize } — the two levers are never both on: choosing an
-// ICC forces firmware optimize off, and firmware mode skips the ICC. Falls back
-// to the legacy options.iccProfile for older clients (always optimize OFF).
+// Color has two INDEPENDENT, combinable levers:
+//   options.colorMode ('' | <profile id>) → ICC conversion in software (or none)
+//   options.firmware  (bool)              → printer Auto Image Correction (CPNP)
+// Either, both, or neither. Both on = convert into the ICC profile, then let the
+// firmware adaptively enhance on top (note: the profile was likely characterized
+// with firmware OFF, so this stacks a correction it didn't account for).
+// Back-compat: old clients sent colorMode:'firmware' as a standalone mode, and
+// legacy options.iccProfile as a bare profile id (firmware off).
 function resolveColor(options) {
-  const mode = options.colorMode ?? options.iccProfile;
-  if (mode === 'firmware') return { icc: {}, imageOptimize: true };
-  return { icc: resolveIcc({ ...options, iccProfile: mode }), imageOptimize: false };
+  const legacyFirmware = (options.colorMode ?? options.iccProfile) === 'firmware';
+  const iccMode = legacyFirmware ? '' : (options.colorMode ?? options.iccProfile);
+  const imageOptimize = legacyFirmware || !!options.firmware;
+  return { icc: resolveIcc({ ...options, iccProfile: iccMode }), imageOptimize };
 }
 
 // Transport chosen per job. CPNP is the default (true full-bleed borderless).
-// Firmware color-correct only exists on CPNP, so firmware mode forces it even
+// Firmware color-correct only exists on CPNP, so requesting it forces CPNP even
 // if the server is configured for an IPP format. Explicit raster formats
 // (pwg/urf) are honored except when firmware correction is requested.
 function effectiveFormat(options) {
-  const mode = options.colorMode ?? options.iccProfile;
-  if (mode === 'firmware') return 'cpnp';
+  const legacyFirmware = (options.colorMode ?? options.iccProfile) === 'firmware';
+  if (legacyFirmware || options.firmware) return 'cpnp';
   return config.printFormat;
 }
 
@@ -351,8 +351,8 @@ app.post('/api/print', async (req, reply) => {
   if (!imageBuf) return reply.code(400).send('missing image');
 
   const copies = Math.min(Math.max(parseInt(options.copies, 10) || 1, 1), 99);
-  // One mutually-exclusive color mode: an ICC profile, the printer's own
-  // firmware auto-correct, or nothing. (Old clients: ICC on unless opted out.)
+  // Two independent color levers: an ICC profile (software) and the printer's
+  // firmware auto-correct (CPNP) — either, both, or neither (see resolveColor).
   const { icc, imageOptimize } = resolveColor(options);
   const transport = effectiveFormat(options);
   const brightness = brightnessFactor(options);
@@ -424,9 +424,10 @@ app.post('/api/preview', async (req, reply) => {
   }
   if (!imageBuf) return reply.code(400).send('missing image');
 
-  // Firmware mode has no ICC, so the preview shows the un-optimized image — the
-  // printer's adaptive correction can't be reproduced client-side (see the note
-  // in the editor). ICC/off modes preview exactly.
+  // The ICC lever previews exactly. Firmware auto-correct runs in the printer
+  // and can't be reproduced client-side, so the preview shows the image before
+  // firmware correction (see the note in the editor) — but it still switches
+  // the transport to CPNP, so effectiveFormat() below keeps the geometry right.
   const { icc } = resolveColor(options);
   const brightness = brightnessFactor(options);
   const plan = buildRenderPlan(options, effectiveFormat(options));

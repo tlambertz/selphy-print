@@ -636,6 +636,13 @@ body {
   border-color: transparent;
   color: #fff;
 }
+/* Firmware auto-correct is an INDEPENDENT toggle (combinable with any ICC
+   choice) — set it apart from the single-select ICC chips, and colour it
+   differently when on so "profile + auto-correct" reads as two things. */
+.color-presets .fw-chip { margin-left: 4px; border-color: var(--line-strong); }
+.color-presets .fw-chip::before { content: '＋'; margin-right: 4px; opacity: 0.55; font-weight: 700; }
+.color-chip.fw-chip[aria-pressed="true"] { background: var(--ok); border-color: transparent; color: #08130c; }
+.color-chip.fw-chip[aria-pressed="true"]::before { content: '✓'; opacity: 1; }
 .color-note {
   flex-basis: 100%;
   text-align: center;
