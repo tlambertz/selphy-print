@@ -189,8 +189,10 @@ export const config = {
    *   per job regardless of the setting.
    * - 'jpeg': plain IPP Print-Job with image/jpeg. Same canvas-size render;
    *   kept for experiments, no firmware color hook.
-   * - 'urf'/'pwg' raster paths: URF prints bordered, PWG is rejected —
-   *   experiments only. */
+   * - 'urf'/'pwg' raster paths: URF prints bordered, PWG was rejected —
+   *   experiments only. (The PWG header used to carry cupsNumColors=1, which
+   *   cups-filters refuses to parse and may be why the printer rejected it;
+   *   fixed 2026-07-11, not yet re-tried on hardware.) */
   printFormat: env.PRINT_FORMAT || 'cpnp',
   // 'borderless' (default): zero-margin media-col — the firmware maps the
   // JPEG onto its overscan rect, so renders are canvas-size with structural

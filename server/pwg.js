@@ -40,8 +40,11 @@ export function encodePwg(rgb, width, height, dpi = 300) {
   header.writeUInt32BE(24, 388); // cupsBitsPerPixel
   header.writeUInt32BE(width * 3, 392); // cupsBytesPerLine
   header.writeUInt32BE(0, 396); // cupsColorOrder = chunked
-  header.writeUInt32BE(1, 400); // cupsColorSpace = RGB (rgb_8)
-  header.writeUInt32BE(1, 420); // TotalPageCount
+  header.writeUInt32BE(19, 400); // cupsColorSpace = sRGB (PWG srgb_8)
+  header.writeUInt32BE(3, 420); // cupsNumColors (3 for RGB — cups-filters
+  // reads ZERO pages if this is wrong; it was long mis-set to 1, mislabeled
+  // as TotalPageCount, which really lives in cupsInteger[0]:)
+  header.writeUInt32BE(1, 452); // TotalPageCount (PWG 5102.4 cupsInteger[0])
 
   const chunks = [Buffer.from('RaS2', 'ascii'), header];
   const bpl = width * 3;

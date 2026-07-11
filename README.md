@@ -350,7 +350,10 @@ are dev-only and harmless without the (uncommitted) keystore.
 ## Tests
 
 ```bash
-npm test    # render pipeline + IPP + PWG encoders against ippeveprinter (needs cups-ipp-utils)
+npm test    # render pipeline + IPP + PWG/URF encoders. The IPP test spawns its own
+            # ippeveprinter (cups-ipp-utils; needs a DNS-SD daemon) and skips cleanly
+            # without it; the PWG test cross-checks against cups-filters' pwgtoraster
+            # when installed.
 npm run e2e # headless-Chrome test of the full UI flow (needs puppeteer dev dep)
 ```
 

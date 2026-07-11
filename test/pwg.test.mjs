@@ -80,6 +80,9 @@ try {
   assert.ok(stdout.length > 1000, 'pwgtoraster produced no raster');
   console.log('pwgtoraster parsed our stream ✓ output', stdout.length, 'bytes');
 } catch (err) {
+  // Only a missing/unrunnable filter is a skip — a parse or size assertion
+  // failing means the encoder is broken and must fail the test.
+  if (err.code === 'ERR_ASSERTION') throw err;
   console.log('pwgtoraster check skipped:', err.code || err.message?.slice(0, 80));
 } finally {
   await rm(pwgPath, { force: true });
