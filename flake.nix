@@ -172,8 +172,8 @@
               type = lib.types.package;
               default =
                 if cfg.buildApkFromSource
-                then self.packages.${pkgs.system}.selphy-print-own-apk
-                else self.packages.${pkgs.system}.selphy-print;
+                then self.packages.${pkgs.stdenv.hostPlatform.system}.selphy-print-own-apk
+                else self.packages.${pkgs.stdenv.hostPlatform.system}.selphy-print;
               defaultText = lib.literalExpression
                 "selphy-print (or selphy-print-own-apk when buildApkFromSource = true)";
             };
